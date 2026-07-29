@@ -323,6 +323,18 @@ jobs:
           cache-to: type=gha,scope=image-amd64,mode=max
           sbom: true
           provenance: mode=max
+      # The serving image intentionally contains no model weights or credentials;
+      # publish it publicly so deployment hosts can pull the immutable digest
+      # without a registry credential. The private source repository remains
+      # private.
+      - name: Make published serving image public
+        if: ${{ github.event_name != 'pull_request' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api --method PATCH "/user/packages/container/${GITHUB_REPOSITORY#*/}" -f visibility=public
+
 
       # GitHub's attestation API rejects user-owned private repositories. Buildx
       # still publishes the OCI SBOM and provenance attestations above; persist
