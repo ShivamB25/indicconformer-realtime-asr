@@ -1,0 +1,70 @@
+{
+  "comment": "HTTP surface of the service: paths, methods, status codes and body field names.",
+  "endpoints": {
+    "/health/live": {
+      "method": "GET",
+      "success_status": 200,
+      "fields": [
+        "status"
+      ],
+      "status_value": "live"
+    },
+    "/health/ready": {
+      "method": "GET",
+      "success_status": 200,
+      "unavailable_status": 503,
+      "fields": [
+        "status",
+        "stage",
+        "checks",
+        "detail"
+      ],
+      "status_values": [
+        "ready",
+        "not_ready"
+      ],
+      "check_names": [
+        "engine",
+        "scheduler"
+      ],
+      "check_values": [
+        "pending",
+        "starting",
+        "ready",
+        "failed",
+        "stopped",
+        "disabled"
+      ]
+    },
+    "/v1/transcribe": {
+      "method": "POST",
+      "success_status": 200,
+      "error_statuses": [
+        400,
+        413,
+        422,
+        503
+      ],
+      "fields": [
+        "text",
+        "language",
+        "mode",
+        "decoder",
+        "audio_duration_ms",
+        "inference_ms",
+        "request_id"
+      ]
+    },
+    "/v1/realtime": {
+      "transport": "websocket"
+    }
+  },
+  "error_fields": [
+    "error",
+    "request_id"
+  ],
+  "accepted_upload_encodings": [
+    "pcm_s16le",
+    "wav_pcm_s16le_mono_16k"
+  ]
+}

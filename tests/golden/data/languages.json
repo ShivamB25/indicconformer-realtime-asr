@@ -1,0 +1,10 @@
+{
+  "languages": ["as", "bn", "brx", "doi", "gu", "hi", "kn", "kok", "ks", "mai", "ml", "mni", "mr", "ne", "or", "pa", "sa", "sat", "sd", "ta", "te", "ur"],
+  "count": 22,
+  "partial_decoder": "ctc",
+  "final_decoder_by_mode": {
+    "latency": "ctc",
+    "hybrid": "rnnt",
+    "accuracy": "rnnt"
+  }
+}

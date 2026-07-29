@@ -1,0 +1,29 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+secrets/
+*.token
+.hf_token
+huggingface_token
+
+# Downloaded model weights and caches
+models/
+.models/
+model-cache/
+.cache/huggingface/
+.huggingface/
+*.onnx
+*.onnx.data
+*.safetensors

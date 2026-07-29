@@ -1,0 +1,144 @@
+{
+  "comment": "Wire shape of the realtime control protocol. Field names, defaults and closed sets only; no audio and no transcription claims.",
+  "client_events": {
+    "session.start": {
+      "required": [
+        "language"
+      ],
+      "optional": [
+        "type",
+        "format",
+        "sample_rate",
+        "channels",
+        "mode",
+        "vad"
+      ],
+      "defaults": {
+        "type": "session.start",
+        "format": "pcm_s16le",
+        "sample_rate": 16000,
+        "channels": 1,
+        "mode": "hybrid",
+        "vad": true
+      }
+    },
+    "input.commit": {
+      "required": [],
+      "optional": [
+        "type"
+      ],
+      "defaults": {
+        "type": "input.commit"
+      }
+    }
+  },
+  "server_events": {
+    "session.ready": {
+      "fields": [
+        "type",
+        "session_id"
+      ]
+    },
+    "speech.started": {
+      "fields": [
+        "type"
+      ]
+    },
+    "transcript.partial": {
+      "fields": [
+        "type",
+        "text",
+        "revision",
+        "is_stable"
+      ]
+    },
+    "transcript.final": {
+      "fields": [
+        "type",
+        "text",
+        "language",
+        "decoder",
+        "audio_duration_ms",
+        "endpoint_to_final_ms"
+      ]
+    },
+    "error": {
+      "fields": [
+        "type",
+        "code",
+        "message",
+        "retryable"
+      ]
+    }
+  },
+  "audio": {
+    "encoding": "pcm_s16le",
+    "sample_rate": 16000,
+    "channels": 1,
+    "frame_duration_ms": 20,
+    "frame_bytes": 640,
+    "samples_per_frame": 320
+  },
+  "error_codes": {
+    "EMPTY_UTTERANCE": {
+      "close_code": null,
+      "retryable": false
+    },
+    "FRAME_TOO_LARGE": {
+      "close_code": 1009,
+      "retryable": false
+    },
+    "IDLE_TIMEOUT": {
+      "close_code": 1001,
+      "retryable": false
+    },
+    "INFERENCE_ERROR": {
+      "close_code": 1011,
+      "retryable": true
+    },
+    "INTERNAL_ERROR": {
+      "close_code": 1011,
+      "retryable": true
+    },
+    "INVALID_FRAME_SIZE": {
+      "close_code": 1002,
+      "retryable": false
+    },
+    "INVALID_SESSION": {
+      "close_code": 1002,
+      "retryable": false
+    },
+    "MALFORMED_EVENT": {
+      "close_code": 1002,
+      "retryable": false
+    },
+    "SERVER_BUSY": {
+      "close_code": 1013,
+      "retryable": true
+    },
+    "SERVICE_UNAVAILABLE": {
+      "close_code": 1013,
+      "retryable": true
+    },
+    "SESSION_ALREADY_STARTED": {
+      "close_code": 1002,
+      "retryable": false
+    },
+    "SESSION_LIMIT": {
+      "close_code": 1000,
+      "retryable": false
+    },
+    "SESSION_REQUIRED": {
+      "close_code": 1002,
+      "retryable": false
+    },
+    "UNKNOWN_EVENT": {
+      "close_code": 1002,
+      "retryable": false
+    },
+    "UTTERANCE_TOO_LONG": {
+      "close_code": 1009,
+      "retryable": false
+    }
+  }
+}

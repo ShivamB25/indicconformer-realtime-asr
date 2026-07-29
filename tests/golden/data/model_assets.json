@@ -1,0 +1,31 @@
+{
+  "comment": "Names and metadata of the files a pinned snapshot must contain. No weights, no hashes of real weights, and no accuracy claims.",
+  "manifest_name": "model-manifest.json",
+  "completion_marker": ".complete",
+  "manifest_schema_version": 1,
+  "manifest_fields": [
+    "schema_version",
+    "repository",
+    "revision",
+    "files"
+  ],
+  "manifest_file_fields": [
+    "path",
+    "sha256",
+    "size"
+  ],
+  "revision_format": "40 lowercase hex characters",
+  "repository_format": "owner/name",
+  "asset_count": 30,
+  "shared_assets": [
+    "config.json",
+    "model_onnx.py",
+    "assets/encoder.onnx",
+    "assets/ctc_decoder.onnx",
+    "assets/joint_enc.onnx",
+    "assets/joint_pre_net.onnx",
+    "assets/joint_pred.onnx",
+    "assets/language_masks.json"
+  ],
+  "per_language_asset_template": "assets/joint_post_net_{language}.onnx"
+}

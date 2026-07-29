@@ -1,0 +1,36 @@
+{
+  "comment": "Text produced by MockEngine, a formatted echo of request metadata. These strings are not speech recognition output and make no accuracy claim.",
+  "template": "mock transcript language={language} decoder={decoder} duration_ms={duration_ms}",
+  "examples": [
+    {
+      "language": "hi",
+      "decoder": "ctc",
+      "duration_ms": 0,
+      "text": "mock transcript language=hi decoder=ctc duration_ms=0"
+    },
+    {
+      "language": "hi",
+      "decoder": "rnnt",
+      "duration_ms": 20,
+      "text": "mock transcript language=hi decoder=rnnt duration_ms=20"
+    },
+    {
+      "language": "ta",
+      "decoder": "ctc",
+      "duration_ms": 400,
+      "text": "mock transcript language=ta decoder=ctc duration_ms=400"
+    },
+    {
+      "language": "sat",
+      "decoder": "rnnt",
+      "duration_ms": 800,
+      "text": "mock transcript language=sat decoder=rnnt duration_ms=800"
+    },
+    {
+      "language": "ur",
+      "decoder": "rnnt",
+      "duration_ms": 30000,
+      "text": "mock transcript language=ur decoder=rnnt duration_ms=30000"
+    }
+  ]
+}

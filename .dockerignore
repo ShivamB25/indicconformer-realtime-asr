@@ -1,0 +1,10 @@
+# Deny by default: production builds receive only the files copied by deploy/Dockerfile.
+**
+
+!pyproject.toml
+!uv.lock
+!.python-version
+!app/
+!app/**
+!scripts/
+!scripts/**

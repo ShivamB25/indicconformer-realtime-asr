@@ -1,0 +1,117 @@
+name: indicconformer-realtime-asr
+
+services:
+  model-init:
+    image: ${ASR_IMAGE:-indicconformer-realtime-asr:local}
+    entrypoint:
+      - /usr/bin/tini
+      - --
+      - /app/.venv/bin/python
+      - /app/scripts/download_model.py
+    command:
+      - --repository
+      - ${ASR_MODEL_REPO_ID:-ai4bharat/indic-conformer-600m-multilingual}
+      - --revision
+      - ${ASR_MODEL_REVISION:?ASR_MODEL_REVISION must be a full immutable commit SHA}
+      - --token-file
+      - /run/secrets/huggingface_token
+      - --output-dir
+      - /models/indicconformer
+    environment:
+      HF_HUB_OFFLINE: "0"
+      TRANSFORMERS_OFFLINE: "0"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      DO_NOT_TRACK: "1"
+    secrets:
+      - source: huggingface_token
+        target: huggingface_token
+    volumes:
+      - model-data:/models
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=128m,uid=10001,gid=10001
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: 2g
+    cpus: 2.0
+    restart: "no"
+
+  asr:
+    image: ${ASR_IMAGE:-indicconformer-realtime-asr:local}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args:
+        CUDA_IMAGE: ${CUDA_IMAGE:-nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04@sha256:2fcc4280646484290cc50dce5e65f388dd04352b07cbe89a635703bd1f9aedb6}
+    depends_on:
+      model-init:
+        condition: service_completed_successfully
+        restart: true
+    environment:
+      ASR_ENVIRONMENT: production
+      ASR_ENGINE: ort
+      ASR_HOST: 0.0.0.0
+      ASR_PORT: "8000"
+      ASR_MODEL_DIR: /models/indicconformer
+      ASR_MODEL_MANIFEST: /models/indicconformer/model-manifest.json
+      ASR_MODEL_REPO_ID: ${ASR_MODEL_REPO_ID:-ai4bharat/indic-conformer-600m-multilingual}
+      ASR_MODEL_REVISION: ${ASR_MODEL_REVISION:?ASR_MODEL_REVISION must be a full immutable commit SHA}
+      ASR_OFFLINE: "true"
+      ASR_REQUIRE_CUDA: "true"
+      ASR_WEBSOCKET_ALLOWED_ORIGINS: ${ASR_WEBSOCKET_ALLOWED_ORIGINS:-[]}
+      ASR_WEBSOCKET_BEARER_TOKEN_FILE: /run/secrets/websocket_bearer_token
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      DO_NOT_TRACK: "1"
+      HOME: /tmp
+    volumes:
+      - model-data:/models:ro
+    secrets:
+      - source: websocket_bearer_token
+        target: websocket_bearer_token
+        mode: 0400
+    ports:
+      - ${ASR_LISTEN_ADDRESS:-127.0.0.1}:${ASR_HOST_PORT:-8000}:8000
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=256m,uid=10001,gid=10001
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    mem_limit: ${ASR_MEMORY_LIMIT:-16g}
+    cpus: ${ASR_CPU_LIMIT:-4.0}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities:
+                - gpu
+    healthcheck:
+      test:
+        - CMD
+        - /app/.venv/bin/python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3).read()
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+secrets:
+  huggingface_token:
+    file: ${HF_TOKEN_FILE:?HF_TOKEN_FILE must point to a local token file}
+  websocket_bearer_token:
+    file: ${ASR_WEBSOCKET_TOKEN_FILE:?ASR_WEBSOCKET_TOKEN_FILE must point to a local token file}
+
+volumes:
+  model-data:
