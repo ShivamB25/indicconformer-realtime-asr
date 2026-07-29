@@ -21,6 +21,7 @@ from app.engine.base import Engine
 from app.observability.metrics import MetricCode, install_metrics
 from app.openai_compat.constants import is_openai_route
 from app.openai_compat.errors import OpenAIError, openai_error_response
+from app.openapi import OPENAPI_TAGS, SERVICE_DESCRIPTION, configure_openapi
 from app.schemas.rest import ErrorResponse
 from app.vad.base import VADProvider
 
@@ -61,8 +62,22 @@ def create_app(
     _configure_logging_once()
     runtime_settings = settings if settings is not None else get_settings()
     application = FastAPI(
-        title="IndicConformer Realtime ASR",
+        title="AI4Bharat IndicConformer ASR",
+        summary="Batch and realtime speech-to-text for 22 Indic languages",
+        description=SERVICE_DESCRIPTION,
         version="1.0.0",
+        contact={
+            "name": "IndicConformer Realtime ASR",
+            "url": "https://github.com/ShivamB25/indicconformer-realtime-asr",
+        },
+        license_info={"name": "MIT"},
+        openapi_tags=OPENAPI_TAGS,
+        swagger_ui_parameters={
+            "defaultModelsExpandDepth": 1,
+            "displayRequestDuration": True,
+            "filter": True,
+            "persistAuthorization": True,
+        },
         lifespan=build_lifespan(
             runtime_settings,
             engine=engine,
@@ -137,6 +152,7 @@ def create_app(
             config=WebSocketConfig(vad_threshold=runtime_settings.vad_speech_threshold)
         )
     )
+    configure_openapi(application)
     return application
 
 

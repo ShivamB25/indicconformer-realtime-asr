@@ -179,6 +179,19 @@ atomically, rejects symlinks/non-regular files, and is idempotent. Compose runs
 it in `model-init`; the serving container receives the completed volume
 read-only and remains offline.
 
+## Interactive API documentation
+
+FastAPI serves interactive Swagger UI at `/docs`, ReDoc at `/redoc`, and the
+OpenAPI 3.1 document at `/openapi.json`. Swagger provides upload controls and
+defaults for both `POST /v1/transcribe` and
+`POST /v1/audio/transcriptions`. Use **Authorize** to set the shared bearer API
+key before executing an inference request; keyless local development can leave
+it empty. Check `/health/ready` first.
+
+OpenAPI does not execute WebSocket protocols. The Swagger introduction lists
+both realtime URLs and their audio framing requirements; use the native or
+OpenAI realtime client examples below to exercise them.
+
 ## OpenAI-compatible API
 
 The primary client surface is compatible with an unmodified current
