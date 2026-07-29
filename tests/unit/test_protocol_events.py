@@ -398,7 +398,7 @@ class TestServerEvents:
             {"type": "transcript.partial", "text": "x", "revision": 0, "is_stable": False},
             {"type": "session.ready", "session_id": "s"},
             {"type": "speech.started"},
-            {"type": "error", "code": "C", "message": "m", "retryable": True},
+            {"type": "error", "code": "INTERNAL_ERROR", "message": "m", "retryable": True},
             {
                 "type": "transcript.final",
                 "text": "t",

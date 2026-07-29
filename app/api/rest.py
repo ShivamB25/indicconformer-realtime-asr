@@ -2,21 +2,22 @@
 
 import io
 import wave
-from contextlib import suppress
 from time import perf_counter
-from typing import Annotated, cast
+from typing import Annotated
 from uuid import uuid4
 
 import anyio
 import numpy as np
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile, status
 
+from app.api.auth import require_http_api_key
 from app.core.config import Settings
 from app.core.logging import get_logger
 from app.core.types import Decoder, LanguageCode, ProcessingMode
-from app.engine.base import Engine, TranscriptionRequest, TranscriptionResult
+from app.engine.base import TranscriptionRequest, TranscriptionResult
 from app.observability.metrics import MetricCode, Metrics
 from app.schemas.rest import ErrorResponse, TranscriptionResponse
+from app.transcription import record_success, run_transcription
 
 router = APIRouter(prefix="/v1", tags=["transcription"])
 _LOGGER = get_logger(__name__)
@@ -47,20 +48,6 @@ def _decode_pcm_upload(payload: bytes) -> np.ndarray:
     return samples.astype(np.float32) / 32768.0
 
 
-async def _run_transcription(
-    request: Request,
-    request_id: str,
-    transcription: TranscriptionRequest,
-) -> TranscriptionResult:
-    scheduler = getattr(request.app.state, "scheduler", None)
-    if scheduler is not None:
-        return cast(TranscriptionResult, await scheduler.submit_final(request_id, transcription))
-    engine: Engine | None = getattr(request.app.state, "engine", None)
-    if engine is None:
-        raise RuntimeError("engine is unavailable")
-    return await anyio.to_thread.run_sync(engine.transcribe, transcription, abandon_on_cancel=True)
-
-
 def _record_success(
     metrics: Metrics,
     request_id: str,
@@ -69,25 +56,15 @@ def _record_success(
     result: TranscriptionResult,
     elapsed_seconds: float,
 ) -> None:
-    """Record one completed transcription without ever discarding it.
-
-    Inference has already succeeded here, so a failure in this bookkeeping must
-    degrade observability rather than turn a finished transcript into a 5xx.
-    """
-
-    audio_seconds = result.audio_duration_ms / 1_000
-    try:
-        metrics.record_transcription(language, mode)
-        metrics.record_audio_seconds(language, mode, audio_seconds)
-        metrics.record_queue_wait(mode, max(0.0, elapsed_seconds - result.inference_ms / 1_000))
-        metrics.record_final_latency(language, mode, elapsed_seconds)
-        if audio_seconds:
-            metrics.record_realtime_factor(language, mode, elapsed_seconds / audio_seconds)
-    except Exception:
-        metrics.record_telemetry_failure()
-        # The recorder above cannot raise; a broken logging pipeline still can.
-        with suppress(Exception):
-            _LOGGER.exception("transcription_metrics_failed", request_id=request_id)
+    record_success(
+        metrics,
+        request_id,
+        language,
+        mode,
+        result,
+        elapsed_seconds,
+        logger=_LOGGER,
+    )
 
 
 @router.post(
@@ -106,6 +83,7 @@ async def transcribe(
     language: Annotated[LanguageCode, Form()],
     mode: Annotated[ProcessingMode, Form()] = ProcessingMode.HYBRID,
 ) -> TranscriptionResponse:
+    require_http_api_key(request)
     settings: Settings = request.app.state.settings
     metrics = request.app.state.metrics
     # The decoder follows server policy exactly as in the realtime handshake, so an
@@ -152,7 +130,7 @@ async def transcribe(
     started = perf_counter()
     try:
         with anyio.fail_after(settings.request_timeout_seconds):
-            result = await _run_transcription(request, request_id, engine_request)
+            result = await run_transcription(request, request_id, engine_request)
     except TimeoutError as exc:
         metrics.record_error(MetricCode.TIMEOUT)
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "transcription timed out") from exc

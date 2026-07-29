@@ -4,16 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import json
-import secrets
 import time
-from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 from starlette.websockets import WebSocketState
 
+from app.api.auth import websocket_admitted
+from app.api.websocket.state import WebSocketConfig, _LiveSession, _SessionRegistry
 from app.audio.endpoint import (
     AdaptivePartialCadence,
     EndpointConfig,
@@ -41,6 +41,7 @@ from app.engine.scheduler import (
 )
 from app.schemas.protocol import (
     InputCommitEvent,
+    ProtocolErrorCode,
     ProtocolErrorEvent,
     SessionReadyEvent,
     SessionStartEvent,
@@ -52,100 +53,13 @@ from app.schemas.protocol import (
 _LOGGER = get_logger(__name__)
 
 
-@dataclass(frozen=True, slots=True)
-class WebSocketConfig:
-    max_sessions: int = 128
-    max_session_seconds: float = 3_600.0
-    max_frame_bytes: int = PCM16_FRAME_BYTES
-    max_utterance_ms: int = 30_000
-    idle_timeout_seconds: float = 30.0
-    vad_threshold: float = 0.015
-    speech_start_ms: int = 60
-    speech_end_ms: int = 600
-    partial_history: int = 3
-    partial_latency_ms: int = 240
-    partial_hybrid_ms: int = 400
-    partial_accuracy_ms: int = 800
-    partial_minimum_ms: int = 200
-    partial_maximum_ms: int = 1_200
-
-    def __post_init__(self) -> None:
-        if self.max_sessions <= 0:
-            raise ValueError("max_sessions must be positive")
-        if self.max_session_seconds <= 0 or self.idle_timeout_seconds <= 0:
-            raise ValueError("session and idle timeouts must be positive")
-        if self.max_frame_bytes < PCM16_FRAME_BYTES:
-            raise ValueError("max_frame_bytes cannot be smaller than one PCM frame")
-        if self.max_utterance_ms <= 0 or self.max_utterance_ms % 20:
-            raise ValueError("max_utterance_ms must be a positive multiple of 20 ms")
-        if self.partial_history < 2:
-            raise ValueError("partial_history must be at least two")
-        cadences = (self.partial_latency_ms, self.partial_hybrid_ms, self.partial_accuracy_ms)
-        if (
-            not 0 < self.partial_minimum_ms <= min(cadences)
-            or max(cadences) > self.partial_maximum_ms
-        ):
-            raise ValueError("partial cadence bounds are invalid")
-
-
-class _SessionRegistry:
-    def __init__(self, limit: int) -> None:
-        self._active = 0
-        self._limit = limit
-        self._lock = asyncio.Lock()
-
-    async def acquire(self) -> bool:
-        async with self._lock:
-            if self._active >= self._limit:
-                return False
-            self._active += 1
-            return True
-
-    async def release(self) -> None:
-        async with self._lock:
-            self._active = max(0, self._active - 1)
-
-
-@dataclass(slots=True)
-class _LiveSession:
-    session_id: str
-    start: SessionStartEvent
-    partial_decoder: Decoder
-    final_decoder: Decoder
-    buffer: PCM16Buffer
-    endpoint: EndpointDetector
-    vad: EnergyVAD
-    cadence: AdaptivePartialCadence
-    stable_prefix: RollingStablePrefix
-    revision: int = 0
-    epoch: int = 0
-    last_partial: str = ""
-    partial_task: asyncio.Task[None] | None = None
-
-
-def create_websocket_router(
-    scheduler: InferenceScheduler | None = None, config: WebSocketConfig | None = None
-) -> APIRouter:
-    """Create a router, optionally binding a scheduler for isolated tests."""
-    effective_config = config or WebSocketConfig()
-    registry = _SessionRegistry(effective_config.max_sessions)
-    result = APIRouter(tags=["realtime"])
-
-    @result.websocket("/v1/realtime")
-    async def realtime_endpoint(websocket: WebSocket) -> None:
-        resolved = scheduler or getattr(websocket.app.state, "scheduler", None)
-        await _serve_websocket(websocket, resolved, effective_config, registry)
-
-    return result
-
-
 async def _serve_websocket(
     websocket: WebSocket,
     scheduler: InferenceScheduler | None,
     config: WebSocketConfig,
     registry: _SessionRegistry,
 ) -> None:
-    if not _admission_allowed(websocket):
+    if not websocket_admitted(websocket):
         metrics = getattr(websocket.app.state, "metrics", None)
         if metrics is not None:
             metrics.record_rejection("INVALID_SESSION")
@@ -310,26 +224,6 @@ async def _serve_websocket(
         await registry.release()
         if metrics is not None:
             metrics.session_ended()
-
-
-def _admission_allowed(websocket: WebSocket) -> bool:
-    settings = getattr(websocket.app.state, "settings", None)
-    if settings is None:
-        return True
-    origin = websocket.headers.get("origin")
-    if origin is not None and origin not in settings.websocket_allowed_origins:
-        return False
-    if settings.websocket_bearer_token_file is None:
-        return True
-    expected = getattr(websocket.app.state, "websocket_bearer_token", None)
-    if not isinstance(expected, str):
-        return False
-    scheme, separator, supplied = websocket.headers.get("authorization", "").partition(" ")
-    return (
-        bool(separator)
-        and scheme.lower() == "bearer"
-        and secrets.compare_digest(supplied, expected)
-    )
 
 
 def _new_session(start: SessionStartEvent, config: WebSocketConfig) -> _LiveSession:
@@ -577,21 +471,34 @@ def _parse_json_object(text: str) -> dict[str, Any] | None:
 
 
 async def _protocol_failure(
-    websocket: WebSocket, lock: asyncio.Lock, code: str, message: str, *, close_code: int = 1002
+    websocket: WebSocket,
+    lock: asyncio.Lock,
+    code: ProtocolErrorCode,
+    message: str,
+    *,
+    close_code: int = 1002,
 ) -> None:
     await _locked_error(websocket, lock, code, message)
     await _close(websocket, close_code)
 
 
 async def _locked_error(
-    websocket: WebSocket, lock: asyncio.Lock, code: str, message: str, retryable: bool = False
+    websocket: WebSocket,
+    lock: asyncio.Lock,
+    code: ProtocolErrorCode,
+    message: str,
+    retryable: bool = False,
 ) -> None:
     async with lock:
         await _send_error(websocket, code, message, retryable=retryable)
 
 
 async def _send_error(
-    websocket: WebSocket, code: str, message: str, *, retryable: bool = False
+    websocket: WebSocket,
+    code: ProtocolErrorCode,
+    message: str,
+    *,
+    retryable: bool = False,
 ) -> None:
     metrics = getattr(websocket.app.state, "metrics", None)
     if metrics is not None:
@@ -610,6 +517,3 @@ async def _close(websocket: WebSocket, code: int) -> None:
             await websocket.close(code=code)
         except (RuntimeError, WebSocketDisconnect):
             pass
-
-
-router = create_websocket_router()

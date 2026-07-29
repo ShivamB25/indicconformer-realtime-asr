@@ -11,6 +11,7 @@ already-constructed Python objects.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -34,8 +35,20 @@ def upload(payload: bytes, name: str = "sample.pcm") -> dict[str, tuple[str, byt
     return {"audio": (name, payload, "application/octet-stream")}
 
 
-def post(client: TestClient, /, audio: bytes = b"", **form: Any) -> Any:
-    return client.post(TRANSCRIBE, data=form, files=upload(audio or speech_frame()))
+def post(
+    client: TestClient,
+    /,
+    audio: bytes = b"",
+    *,
+    headers: dict[str, str] | None = None,
+    **form: Any,
+) -> Any:
+    return client.post(
+        TRANSCRIBE,
+        data=form,
+        files=upload(audio or speech_frame()),
+        headers=headers,
+    )
 
 
 def assert_validation_error(response: Any, field: str) -> None:
@@ -44,6 +57,56 @@ def assert_validation_error(response: Any, field: str) -> None:
     assert field in payload.error
     assert payload.request_id is None
     assert "detail" not in response.json()
+
+
+class TestAuthentication:
+    TOKEN = "test-service-api-key-that-is-long-enough"
+
+    def secured_app(self, tmp_path: Path, scheduler: SchedulerDouble) -> Any:
+        key_file = tmp_path / "api.key"
+        key_file.write_text(self.TOKEN, encoding="utf-8")
+        return scheduler_app(scheduler, api_key_file=key_file)
+
+    @pytest.mark.parametrize(
+        "authorization",
+        [
+            None,
+            "Basic credentials",
+            "Bearer",
+            "Bearer  malformed",
+            "Bearer wrong-key",
+        ],
+        ids=["missing", "wrong_scheme", "missing_key", "extra_space", "wrong_key"],
+    )
+    def test_missing_malformed_or_wrong_bearer_never_reaches_inference(
+        self, tmp_path: Path, authorization: str | None
+    ) -> None:
+        scheduler = SchedulerDouble()
+        headers = None if authorization is None else {"authorization": authorization}
+        with TestClient(self.secured_app(tmp_path, scheduler)) as client:
+            response = post(client, language="hi", headers=headers)
+
+        assert response.status_code == 401
+        assert response.headers["www-authenticate"] == "Bearer"
+        assert scheduler.finals == []
+
+    def test_the_correct_bearer_reaches_native_inference(self, tmp_path: Path) -> None:
+        scheduler = SchedulerDouble()
+        with TestClient(self.secured_app(tmp_path, scheduler)) as client:
+            response = post(
+                client,
+                language="hi",
+                headers={"authorization": f"Bearer {self.TOKEN}"},
+            )
+
+        assert response.status_code == 200, response.text
+        assert len(scheduler.finals) == 1
+
+    def test_health_endpoints_remain_public(self, tmp_path: Path) -> None:
+        scheduler = SchedulerDouble()
+        with TestClient(self.secured_app(tmp_path, scheduler)) as client:
+            assert client.get("/health/live").status_code == 200
+            assert client.get("/health/ready").status_code == 200
 
 
 class TestFormValidation:

@@ -201,19 +201,22 @@ class TestFirstEventOrdering:
 
 
 class TestAdmission:
-    TOKEN = "test-websocket-token-that-is-long-enough"
+    TOKEN = "test-service-api-key-that-is-long-enough"
 
     @classmethod
     def secured_app(cls, tmp_path: Path, **settings: Any) -> Any:
-        token_file = tmp_path / "websocket.token"
-        token_file.write_text(cls.TOKEN, encoding="utf-8")
+        key_file = tmp_path / "api.key"
+        key_file.write_text(cls.TOKEN, encoding="utf-8")
         return mock_engine_app(
-            websocket_bearer_token_file=token_file,
+            api_key_file=key_file,
             **settings,
         )
 
-    @pytest.mark.parametrize("authorization", [None, "Bearer wrong-token"])
-    def test_missing_or_wrong_bearer_is_rejected_before_accept(
+    @pytest.mark.parametrize(
+        "authorization",
+        [None, "Basic credentials", "Bearer", "Bearer  malformed", "Bearer wrong-token"],
+    )
+    def test_missing_malformed_or_wrong_bearer_is_rejected_before_accept(
         self, tmp_path: Path, authorization: str | None
     ) -> None:
         headers = {} if authorization is None else {"authorization": authorization}

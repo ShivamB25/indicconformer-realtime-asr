@@ -8,7 +8,7 @@ from typing import Protocol
 
 from fastapi import FastAPI
 
-from app.core.config import Settings, read_websocket_bearer_token
+from app.core.config import Settings, read_api_key
 from app.core.readiness import CheckStatus, ReadinessTracker
 from app.core.types import EngineKind
 from app.engine.base import Engine, TranscriptionRequest, TranscriptionResult
@@ -92,13 +92,11 @@ def build_lifespan(
         active_scheduler = scheduler
         app.state.engine = None
         app.state.scheduler = None
-        app.state.websocket_bearer_token = None
+        app.state.api_key = None
 
         try:
-            if settings.websocket_bearer_token_file is not None:
-                app.state.websocket_bearer_token = read_websocket_bearer_token(
-                    settings.websocket_bearer_token_file
-                )
+            if settings.api_key_file is not None:
+                app.state.api_key = read_api_key(settings.api_key_file)
             tracker.update(stage="engine_constructing", engine=CheckStatus.STARTING)
             if active_engine is None:
                 active_engine = _build_engine(settings)

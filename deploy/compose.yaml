@@ -62,7 +62,7 @@ services:
       ASR_OFFLINE: "true"
       ASR_REQUIRE_CUDA: "true"
       ASR_WEBSOCKET_ALLOWED_ORIGINS: ${ASR_WEBSOCKET_ALLOWED_ORIGINS:-[]}
-      ASR_WEBSOCKET_BEARER_TOKEN_FILE: /run/secrets/websocket_bearer_token
+      ASR_API_KEY_FILE: /run/secrets/api_key
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
       HF_HUB_DISABLE_TELEMETRY: "1"
@@ -71,8 +71,8 @@ services:
     volumes:
       - model-data:/models:ro
     secrets:
-      - source: websocket_bearer_token
-        target: websocket_bearer_token
+      - source: api_key
+        target: api_key
         mode: 0400
     ports:
       - ${ASR_LISTEN_ADDRESS:-127.0.0.1}:${ASR_HOST_PORT:-8000}:8000
@@ -110,8 +110,8 @@ services:
 secrets:
   huggingface_token:
     file: ${HF_TOKEN_FILE:?HF_TOKEN_FILE must point to a local token file}
-  websocket_bearer_token:
-    file: ${ASR_WEBSOCKET_TOKEN_FILE:?ASR_WEBSOCKET_TOKEN_FILE must point to a local token file}
+  api_key:
+    file: ${ASR_API_KEY_TOKEN_FILE:?ASR_API_KEY_TOKEN_FILE must point to a local API key file}
 
 volumes:
   model-data:

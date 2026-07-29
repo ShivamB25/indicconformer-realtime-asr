@@ -18,7 +18,7 @@ snapshot and CUDA execution provider are healthy.
 ```text
 client microphone / WAV
         |
-        | REST multipart or WSS binary PCM16
+        | OpenAI/native REST or WebSocket
         v
 FastAPI gateway
   +-- protocol validation and admission control
@@ -39,6 +39,35 @@ One ASR process owns one GPU. WebSocket connections must remain sticky to that
 process for their entire lifetime. The scheduler allows only one outstanding
 partial per session, supersedes stale partial work, length-buckets compatible
 requests, and drains active inference before shutdown.
+
+### Code organization
+
+The package layout follows one-way dependencies so a symbol search lands in the
+module that owns the behavior:
+
+```text
+app/main.py                         application composition and exception mapping
+app/api/                            HTTP and WebSocket transport adapters
+  websocket/router.py               native WebSocket route assembly
+  websocket/connection.py           native connection lifecycle and dispatch
+  websocket/state.py                native configuration and live session state
+  openai_realtime/router.py         OpenAI realtime route assembly
+  openai_realtime/connection.py     OpenAI event dispatch and inference handoff
+app/openai_compat/                  OpenAI-specific wire contracts and mapping
+  realtime/schemas.py               client/server Pydantic event models
+  realtime/state.py                 buffers, VAD state, and committed turns
+app/transcription.py                transport-independent transcription use case
+app/audio/                          PCM, resampling, VAD, endpointing, stable prefix
+app/engine/                         engine contracts, scheduler, ORT and decoders
+app/core/                           settings, lifespan, readiness, logging, shared types
+app/observability/                  metrics and tracing
+```
+
+Dependencies point from application composition to routers, from routers to
+connection handlers, and from handlers to schemas/state/use cases. Schema and
+state modules never import routers. Package `__init__.py` files are compatibility
+facades only: internal modules import the concrete defining module to avoid
+cycles and make CodeGraph call paths unambiguous.
 
 ## Supported languages and modes
 
@@ -99,7 +128,92 @@ Never use `uv sync --all-extras`: it would attempt to resolve mutually exclusive
 CPU and GPU runtime wheels. The production ORT image intentionally excludes the
 separate multi-gigabyte PyTorch stack.
 
-## REST API
+## OpenAI-compatible API
+
+The primary client surface is compatible with an unmodified current
+`openai-python` client. Set its `base_url` to this service's `/v1` prefix and
+use the same bearer API key configured for the server:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="read-from-your-auth-flow",
+    base_url="https://asr.example.com/v1",
+)
+
+with open("speech.wav", "rb") as audio:
+    transcript = client.audio.transcriptions.create(
+        model="indicconformer-600m",
+        file=audio,
+        language="hi",
+        response_format="json",
+    )
+
+print(transcript.text)
+```
+
+`POST /v1/audio/transcriptions` accepts normal multipart audio containers,
+decodes them to mono 16 kHz audio, and submits an RNNT final. `model` and
+`language` are required. The canonical model ID is
+`ai4bharat/indic-conformer-600m-multilingual`; `indicconformer-600m` is an
+accepted alias. Supported response formats are `json` (default) and `text`.
+`stream=true`, timestamps, prompts, non-zero temperature, unknown fields, and
+unsupported languages are rejected with an OpenAI-shaped error rather than
+silently ignored.
+
+Model discovery is available at `GET /v1/models` and `GET /v1/models/{model}`.
+Every OpenAI REST response includes `x-request-id`.
+
+### OpenAI realtime transcription
+
+Connect to `wss://HOST/v1/realtime/transcription_sessions`. This is the current
+GA transcription-session event contract, separate from the native binary
+protocol:
+
+1. Receive `session.created`.
+2. Send `session.update` with `session.type: "transcription"`, PCM input at
+   24 kHz, one supported language, and either `server_vad` or `null`.
+3. Send `input_audio_buffer.append` events containing base64 PCM16LE mono
+   24 kHz audio.
+4. With manual endpointing, send `input_audio_buffer.commit`; the server first
+   emits `input_audio_buffer.committed`, then item-correlated transcription
+   `delta` and `completed` events. With `server_vad`, speech boundaries commit
+   automatically.
+
+```json
+{
+  "type": "session.update",
+  "event_id": "update-1",
+  "session": {
+    "type": "transcription",
+    "audio": {
+      "input": {
+        "format": {"type": "audio/pcm", "rate": 24000},
+        "transcription": {
+          "model": "indicconformer-600m",
+          "languages": ["hi"]
+        },
+        "turn_detection": {
+          "type": "server_vad",
+          "threshold": 0.5,
+          "prefix_padding_ms": 300,
+          "silence_duration_ms": 500
+        }
+      }
+    }
+  }
+}
+```
+
+The adapter validates base64 and buffer bounds, resamples 24 kHz input to the
+engine's 16 kHz contract, preserves per-item `delta`-before-`completed`
+ordering, and permits later turns to finish before earlier turns. Use client
+`event_id` values to correlate recoverable errors.
+
+## Native REST API
+
+The native API remains available for low-overhead internal clients.
 
 `POST /v1/transcribe` accepts multipart form data:
 
@@ -138,7 +252,7 @@ encoding, and configured duration limits before scheduling inference. A `4xx`
 response contains a machine-readable `error` and `request_id`; server failures
 are not reported as successful transcripts.
 
-## WebSocket API
+## Native WebSocket API
 
 Connect to `ws://HOST:PORT/v1/realtime` locally or `wss://…/v1/realtime` behind
 TLS. The wire contract is deliberately strict:
@@ -231,20 +345,22 @@ audio, frames other than 640 bytes, or invalid state transitions produce an
 explicit protocol error and close the session. Use a new connection to retry a
 non-retryable protocol failure.
 
-### Production WebSocket admission
+### Production inference admission
 
-Every production connection needs:
+Every production REST or WebSocket inference request needs:
 
 ```text
-Authorization: Bearer <token-read-from-ASR_WEBSOCKET_BEARER_TOKEN_FILE>
+Authorization: Bearer <token-read-from-ASR_API_KEY_FILE>
 ```
 
-The token file must be an absolute-path regular file containing one 32–4096
-character non-whitespace value. A browser `Origin`, when present, must exactly
-match one entry in `ASR_WEBSOCKET_ALLOWED_ORIGINS`. An empty allowlist rejects
-all Origin-bearing clients but permits authenticated native clients that omit an
-Origin header. Terminate TLS at the ingress/load balancer; use a sticky-session
-rule for `/v1/realtime`.
+The key file must be an absolute-path regular file containing one 32–4096
+character ASCII value without whitespace. A browser `Origin`, when present,
+must exactly match one entry in `ASR_WEBSOCKET_ALLOWED_ORIGINS`. An empty
+allowlist rejects all Origin-bearing WebSocket clients but permits authenticated
+native clients that omit an Origin header. Authentication is disabled only when
+no API key is configured outside production. Health and metrics stay
+unauthenticated. Terminate TLS at the ingress/load balancer and use sticky
+sessions for both WebSocket routes.
 
 ## Model provisioning and GPU deployment
 
@@ -282,7 +398,7 @@ Prerequisites:
   Toolkit installed on the host.
 - One GPU per ASR process.
 - A valid Hugging Face token file for the gated checkpoint.
-- An independent 32+ character WebSocket bearer token file.
+- An independent 32+ character API key file.
 - A private GHCR `read:packages` credential if the serving image remains private.
 
 Create untracked local files:
@@ -290,8 +406,8 @@ Create untracked local files:
 ```bash
 mkdir -p .secrets
 printf '%s' '<hf-read-token>' > .secrets/huggingface_token
-printf '%s' '<long-random-websocket-token>' > .secrets/websocket_token
-chmod 600 .secrets/huggingface_token .secrets/websocket_token
+printf '%s' '<long-random-api-key>' > .secrets/api_key
+chmod 600 .secrets/huggingface_token .secrets/api_key
 ```
 
 Create `.env`:
@@ -300,7 +416,7 @@ Create `.env`:
 ASR_IMAGE=ghcr.io/shivamb25/indicconformer-realtime-asr@sha256:<64-hex-image-digest>
 ASR_MODEL_REVISION=<40-hex-model-commit>
 HF_TOKEN_FILE=/absolute/path/to/.secrets/huggingface_token
-ASR_WEBSOCKET_TOKEN_FILE=/absolute/path/to/.secrets/websocket_token
+ASR_API_KEY_TOKEN_FILE=/absolute/path/to/.secrets/api_key
 ASR_WEBSOCKET_ALLOWED_ORIGINS=["https://speech.example.com"]
 ASR_LISTEN_ADDRESS=127.0.0.1
 ASR_HOST_PORT=8000
@@ -333,8 +449,11 @@ pinned to its selected replica.
 | `GET /health/live` | Process/event-loop liveness only; never invokes inference |
 | `GET /health/ready` | Exact model, CUDA, warmup, and scheduler readiness |
 | `GET /metrics` | Prometheus counters, gauges, and latency histograms |
-| `POST /v1/transcribe` | Bounded file/PCM transcription |
-| `WS /v1/realtime` | Stateful low-latency PCM16 transcription |
+| `POST /v1/audio/transcriptions` | OpenAI-compatible bounded audio transcription |
+| `GET /v1/models` | OpenAI-compatible model discovery |
+| `WS /v1/realtime/transcription_sessions` | OpenAI GA realtime transcription events |
+| `POST /v1/transcribe` | Native bounded PCM transcription |
+| `WS /v1/realtime` | Native low-overhead PCM16 transcription |
 
 Use `/health/live` for restart decisions and `/health/ready` for load-balancer
 admission. Do not route production traffic until readiness is successful.

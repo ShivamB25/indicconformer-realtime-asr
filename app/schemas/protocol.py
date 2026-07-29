@@ -4,7 +4,7 @@ Audio frames are raw binary PCM and intentionally have no JSON model here.
 WebSocket orchestration lives elsewhere.
 """
 
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -13,6 +13,26 @@ from app.core.types import Decoder, LanguageCode, ProcessingMode
 
 class ProtocolEvent(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
+
+
+ProtocolErrorCode = Literal[
+    "EMPTY_UTTERANCE",
+    "FRAME_TOO_LARGE",
+    "IDLE_TIMEOUT",
+    "INFERENCE_ERROR",
+    "INTERNAL_ERROR",
+    "INVALID_FRAME_SIZE",
+    "INVALID_SESSION",
+    "MALFORMED_EVENT",
+    "SERVER_BUSY",
+    "SERVICE_UNAVAILABLE",
+    "SESSION_ALREADY_STARTED",
+    "SESSION_LIMIT",
+    "SESSION_REQUIRED",
+    "UNKNOWN_EVENT",
+    "UTTERANCE_TOO_LONG",
+]
+PROTOCOL_ERROR_CODES: frozenset[str] = frozenset(get_args(ProtocolErrorCode))
 
 
 class SessionStartEvent(ProtocolEvent):
@@ -69,7 +89,7 @@ class TranscriptFinalEvent(ProtocolEvent):
 
 class ProtocolErrorEvent(ProtocolEvent):
     type: Literal["error"] = "error"
-    code: str
+    code: ProtocolErrorCode
     message: str
     retryable: bool = False
 

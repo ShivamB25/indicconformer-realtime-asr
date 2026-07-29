@@ -8,8 +8,6 @@ contains no audio and no transcription output.
 
 from __future__ import annotations
 
-import re
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -24,6 +22,7 @@ from app.audio.pcm import (
 )
 from app.core.types import ProcessingMode
 from app.schemas.protocol import (
+    PROTOCOL_ERROR_CODES,
     InputCommitEvent,
     ProtocolErrorEvent,
     SessionReadyEvent,
@@ -46,7 +45,6 @@ SERVER_MODELS: dict[str, type[BaseModel]] = {
     "transcript.final": TranscriptFinalEvent,
     "error": ProtocolErrorEvent,
 }
-WEBSOCKET_SOURCE = Path(__file__).resolve().parents[2] / "app" / "api" / "websocket.py"
 
 
 class TestEventInventory:
@@ -107,9 +105,7 @@ class TestAudioGeometry:
 
 class TestErrorCodes:
     def test_every_error_code_emitted_by_the_server_is_documented(self) -> None:
-        source = WEBSOCKET_SOURCE.read_text(encoding="utf-8")
-        emitted = set(re.findall(r'"([A-Z][A-Z_]{3,})"', source))
-        assert emitted == set(GOLDEN["error_codes"])
+        assert PROTOCOL_ERROR_CODES == set(GOLDEN["error_codes"])
 
     @pytest.mark.parametrize("code", sorted(GOLDEN["error_codes"]))
     def test_documented_close_codes_are_valid_websocket_codes(self, code: str) -> None:

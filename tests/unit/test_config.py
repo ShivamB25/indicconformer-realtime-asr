@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from app.core.config import Settings, get_settings
+from app.core.config import Settings, get_settings, read_api_key
 from app.core.types import EngineKind
 
 
@@ -172,23 +172,23 @@ class TestEngineSelection:
         assert settings.model_dir == artifacts["model_dir"]
         assert settings.model_manifest == artifacts["model_manifest"]
 
-    def test_production_requires_an_absolute_websocket_token_path(self, tmp_path: Path) -> None:
+    def test_production_requires_an_absolute_api_key_path(self, tmp_path: Path) -> None:
         artifacts = local_artifacts(tmp_path)
-        with pytest.raises(ValidationError, match="websocket_bearer_token_file"):
+        with pytest.raises(ValidationError, match="api_key_file"):
             Settings(
                 environment="production",
                 engine=EngineKind.ORT,
-                websocket_bearer_token_file=Path("relative-token"),
+                api_key_file=Path("relative-token"),
                 **artifacts,
             )
 
         settings = Settings(
             environment="production",
             engine=EngineKind.ORT,
-            websocket_bearer_token_file=Path("/run/secrets/websocket_bearer_token"),
+            api_key_file=Path("/run/secrets/api_key"),
             **artifacts,
         )
-        assert settings.websocket_bearer_token_file == Path("/run/secrets/websocket_bearer_token")
+        assert settings.api_key_file == Path("/run/secrets/api_key")
 
     def test_the_mock_engine_needs_no_artifacts(self, monkeypatch: pytest.MonkeyPatch) -> None:
         clear_asr_environment(monkeypatch)
@@ -196,6 +196,46 @@ class TestEngineSelection:
         settings = Settings()
         assert settings.engine is EngineKind.MOCK
         assert settings.offline is False
+
+
+class TestApiKeyFile:
+    TOKEN = "a-secure-service-api-key-that-is-long-enough"
+
+    def test_one_bounded_ascii_token_is_loaded(self, tmp_path: Path) -> None:
+        key_file = tmp_path / "api.key"
+        key_file.write_text(f"{self.TOKEN}\n", encoding="utf-8")
+
+        assert read_api_key(key_file) == self.TOKEN
+
+    @pytest.mark.parametrize(
+        "content",
+        [
+            "too-short",
+            "x" * 4097,
+            "x" * 31 + " embedded-space",
+            "é" * 32,
+        ],
+        ids=["too_short", "too_long", "whitespace", "non_ascii"],
+    )
+    def test_invalid_or_non_comparable_tokens_are_rejected(
+        self, tmp_path: Path, content: str
+    ) -> None:
+        key_file = tmp_path / "api.key"
+        key_file.write_text(content, encoding="utf-8")
+
+        with pytest.raises(ValueError, match="32-4096 character ASCII token"):
+            read_api_key(key_file)
+
+    def test_non_regular_key_paths_are_rejected(self, tmp_path: Path) -> None:
+        target = tmp_path / "real.key"
+        target.write_text(self.TOKEN, encoding="utf-8")
+        link = tmp_path / "linked.key"
+        link.symlink_to(target)
+
+        with pytest.raises(ValueError, match="regular file"):
+            read_api_key(link)
+        with pytest.raises(ValueError, match="regular file"):
+            read_api_key(tmp_path)
 
 
 class TestLimits:

@@ -66,10 +66,15 @@ class TestPublishedSurface:
 
         assert ENDPOINTS[path]["success_status"] in declared
 
-    def test_no_undocumented_transcription_path_appears(self, schema: dict[str, Any]) -> None:
+    def test_no_undocumented_versioned_http_path_appears(self, schema: dict[str, Any]) -> None:
         versioned = sorted(path for path in schema["paths"] if path.startswith("/v1"))
 
-        assert versioned == ["/v1/transcribe"]
+        assert versioned == [
+            "/v1/audio/transcriptions",
+            "/v1/models",
+            "/v1/models/{model}",
+            "/v1/transcribe",
+        ]
 
     def test_the_realtime_path_is_not_an_http_endpoint(
         self, client: TestClient, schema: dict[str, Any]

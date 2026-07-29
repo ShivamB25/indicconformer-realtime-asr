@@ -239,13 +239,13 @@ jobs:
             "${IMAGE_REF}" \
             -c 'from app.engine.ort_engine import require_cuda_provider; require_cuda_provider()'
 
-      - name: Create ephemeral WebSocket admission token
+      - name: Create ephemeral service API key
         run: |
           set -euo pipefail
-          token_file="${RUNNER_TEMP}/asr-websocket-token-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          token_file="${RUNNER_TEMP}/asr-api-key-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           umask 077
           python3 -c 'import secrets; print(secrets.token_urlsafe(48))' > "${token_file}"
-          echo "WEBSOCKET_TOKEN_FILE=${token_file}" >> "$GITHUB_ENV"
+          echo "ASR_API_KEY_TOKEN_FILE=${token_file}" >> "$GITHUB_ENV"
 
       - name: Start release image with offline model mount
         id: server
@@ -260,7 +260,7 @@ jobs:
             --tmpfs /tmp:rw,noexec,nosuid,size=1g \
             -p 127.0.0.1::8000 \
             --mount "type=bind,src=${MODEL_DIR},dst=/models/indicconformer,readonly" \
-            --mount "type=bind,src=${WEBSOCKET_TOKEN_FILE},dst=/run/websocket_bearer_token,readonly" \
+            --mount "type=bind,src=${ASR_API_KEY_TOKEN_FILE},dst=/run/api_key,readonly" \
             -e ASR_ENGINE=ort \
             -e ASR_ENVIRONMENT=production \
             -e ASR_MODEL_DIR=/models/indicconformer \
@@ -269,7 +269,7 @@ jobs:
             -e ASR_MODEL_REVISION="${MODEL_REVISION}" \
             -e ASR_OFFLINE=true \
             -e ASR_REQUIRE_CUDA=true \
-            -e ASR_WEBSOCKET_BEARER_TOKEN_FILE=/run/websocket_bearer_token \
+            -e ASR_API_KEY_FILE=/run/api_key \
             -e HF_HUB_OFFLINE=1 \
             -e TRANSFORMERS_OFFLINE=1 \
             -e HF_HUB_DISABLE_TELEMETRY=1 \

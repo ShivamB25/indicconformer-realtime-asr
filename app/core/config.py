@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     max_audio_seconds: int = Field(default=600, ge=1, le=3600)
     request_timeout_seconds: float = Field(default=120.0, gt=0, le=3600)
     websocket_allowed_origins: tuple[str, ...] = ()
-    websocket_bearer_token_file: Path | None = None
+    api_key_file: Path | None = None
 
     @model_validator(mode="after")
     def validate_engine_artifacts(self) -> Self:
@@ -47,9 +47,9 @@ class Settings(BaseSettings):
         if self.environment == "production" and not self.require_cuda:
             raise ValueError("production engines require CUDA")
         if self.environment == "production":
-            token_file = self.websocket_bearer_token_file
-            if token_file is None or not token_file.is_absolute():
-                raise ValueError("production requires an absolute websocket_bearer_token_file")
+            key_file = self.api_key_file
+            if key_file is None or not key_file.is_absolute():
+                raise ValueError("production requires an absolute api_key_file")
         if any(
             not origin.startswith(("http://", "https://"))
             for origin in self.websocket_allowed_origins
@@ -78,19 +78,28 @@ class Settings(BaseSettings):
         return self
 
 
-def read_websocket_bearer_token(path: Path) -> str:
-    """Load one bounded token from a real file without exposing its contents."""
+def read_api_key(path: Path) -> str:
+    """Load one bounded, constant-time-comparable API key from a regular file."""
     try:
         if path.is_symlink() or not path.is_file():
-            raise ValueError("websocket bearer token path must be a regular file")
-        token = path.read_text(encoding="utf-8").strip()
+            raise ValueError("API key path must be a regular file")
+        key = path.read_text(encoding="utf-8")
+        if key.endswith("\r\n"):
+            key = key[:-2]
+        elif key.endswith("\n"):
+            key = key[:-1]
     except ValueError:
         raise
     except (OSError, UnicodeError):
-        raise ValueError("websocket bearer token file cannot be read") from None
-    if len(token) < 32 or len(token) > 4096 or any(character.isspace() for character in token):
-        raise ValueError("websocket bearer token must contain one 32-4096 character token")
-    return token
+        raise ValueError("API key file cannot be read") from None
+    if (
+        len(key) < 32
+        or len(key) > 4096
+        or not key.isascii()
+        or any(character.isspace() for character in key)
+    ):
+        raise ValueError("API key must contain one 32-4096 character ASCII token")
+    return key
 
 
 @lru_cache(maxsize=1)
