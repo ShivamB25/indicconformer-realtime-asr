@@ -462,8 +462,8 @@ The public Docker Hub repository exposes four explicit Linux/amd64 variants:
 | --- | --- | --- | --- |
 | `cpu-no-vad` | `main` | CPU; no VAD package | `sha256:a233f24cc31fd94d080d99f3919ee18753d1db0b469946637538bf0cf6574918` |
 | `gpu-no-vad` | `main` | CUDA/TensorRT; no VAD package | `sha256:05470881ea523bc8d07f73b48eb560b33ee1ae31785b003f9707f39489db9093` |
-| `cpu-vad` | VAD branch | CPU; Silero/WebRTC/Energy | `sha256:b18112ffffa6a2035b90d77dac0864813fc2e434d4ba5fa3f3420764cfdb057d` |
-| `gpu-vad` | VAD branch | CUDA/TensorRT; CPU Silero/WebRTC/Energy | `sha256:727d3bc4791a6c06ad06c71d133eeffe5ec13ff16060e70bb5bc2e78a47243f0` |
+| `cpu-vad` | VAD branch | CPU; Silero/WebRTC/Energy | `sha256:44a35fee708d11050f9d0e92bf10740e51ec3a8c56c1690d770e11b3fa58552f` |
+| `gpu-vad` | VAD branch | CUDA/TensorRT; CPU Silero/WebRTC/Energy | `sha256:8ed92881a719c0e5e1aa0f3ea681a94eb6aab73cea04bfc79c17c761af7b3620` |
 
 All four tags are public and contain application dependencies only; ASR and
 Silero model weights remain external mounts. Pin deployments by the published
@@ -509,7 +509,7 @@ chmod 600 .secrets/huggingface_token .secrets/api_key
 Create `.env`:
 
 ```dotenv
-ASR_IMAGE=shivam250/indicconformer-realtime-asr:gpu-vad@sha256:727d3bc4791a6c06ad06c71d133eeffe5ec13ff16060e70bb5bc2e78a47243f0
+ASR_IMAGE=shivam250/indicconformer-realtime-asr:gpu-vad@sha256:8ed92881a719c0e5e1aa0f3ea681a94eb6aab73cea04bfc79c17c761af7b3620
 ASR_MODEL_REVISION=<40-hex-model-commit>
 HF_TOKEN_FILE=/absolute/path/to/.secrets/huggingface_token
 ASR_API_KEY_TOKEN_FILE=/absolute/path/to/.secrets/api_key
