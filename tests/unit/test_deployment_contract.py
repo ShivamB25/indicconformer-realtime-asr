@@ -52,7 +52,7 @@ def test_dockerfile_requires_immutable_apt_inputs_and_bounds_shutdown() -> None:
     }
 
     assert arg_lines == required_args
-    assert "snapshot\.ubuntu\.com/ubuntu/[0-9]{8}T[0-9]{6}Z" in dockerfile
+    assert r"snapshot\.ubuntu\.com/ubuntu/[0-9]{8}T[0-9]{6}Z" in dockerfile
     for package, variable in (
         ("ca-certificates", "APT_CA_CERTIFICATES_VERSION"),
         ("libgomp1", "APT_LIBGOMP1_VERSION"),
