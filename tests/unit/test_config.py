@@ -60,7 +60,7 @@ class TestDefaults:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         clear_asr_environment(monkeypatch)
-        (tmp_path / ".env").write_text("ASR_ENGINE=ort\nASR_PORT=9999\n", encoding="utf-8")
+        (tmp_path / ".env").write_text("ASR_ENGINE=official\nASR_PORT=9999\n", encoding="utf-8")
         monkeypatch.chdir(tmp_path)
         settings = Settings()
         assert settings.engine is EngineKind.MOCK
@@ -96,7 +96,7 @@ class TestDefaults:
 
 class TestEngineSelection:
     def test_engine_kind_set_is_closed(self) -> None:
-        assert [kind.value for kind in EngineKind] == ["mock", "official", "ort"]
+        assert [kind.value for kind in EngineKind] == ["mock", "official"]
 
     @pytest.mark.parametrize("engine", ["whisper", "MOCK", "onnx", ""])
     def test_unknown_engines_are_rejected(
@@ -121,12 +121,11 @@ class TestEngineSelection:
         monkeypatch.setenv("ASR_ENVIRONMENT", "test")
         assert Settings().engine is EngineKind.MOCK
 
-    @pytest.mark.parametrize("engine", ["official", "ort"])
-    def test_real_engines_require_every_pinned_artifact(
-        self, monkeypatch: pytest.MonkeyPatch, engine: str
+    def test_official_engine_requires_every_pinned_artifact(
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         clear_asr_environment(monkeypatch)
-        monkeypatch.setenv("ASR_ENGINE", engine)
+        monkeypatch.setenv("ASR_ENGINE", "official")
         with pytest.raises(ValidationError) as caught:
             Settings()
         message = str(caught.value)
@@ -142,7 +141,7 @@ class TestEngineSelection:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, omitted: str
     ) -> None:
         clear_asr_environment(monkeypatch)
-        monkeypatch.setenv("ASR_ENGINE", "ort")
+        monkeypatch.setenv("ASR_ENGINE", "official")
         for name, value in local_artifacts(tmp_path).items():
             if name != omitted:
                 monkeypatch.setenv(f"ASR_{name.upper()}", str(value))
@@ -156,7 +155,7 @@ class TestEngineSelection:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         clear_asr_environment(monkeypatch)
-        monkeypatch.setenv("ASR_ENGINE", "ort")
+        monkeypatch.setenv("ASR_ENGINE", "official")
         for name, value in local_artifacts(tmp_path).items():
             monkeypatch.setenv(f"ASR_{name.upper()}", str(value))
         monkeypatch.setenv("ASR_OFFLINE", "false")
@@ -182,14 +181,14 @@ class TestEngineSelection:
         with pytest.raises(ValidationError, match="api_key_file"):
             Settings(
                 environment="production",
-                engine=EngineKind.ORT,
+                engine=EngineKind.OFFICIAL,
                 api_key_file=Path("relative-token"),
                 **artifacts,
             )
 
         settings = Settings(
             environment="production",
-            engine=EngineKind.ORT,
+            engine=EngineKind.OFFICIAL,
             api_key_file=Path("/run/secrets/api_key"),
             vad_provider=VADKind.WEBRTC,
             **artifacts,
@@ -202,6 +201,19 @@ class TestEngineSelection:
         settings = Settings()
         assert settings.engine is EngineKind.MOCK
         assert settings.offline is False
+
+    def test_production_accepts_the_pinned_official_cpu_runtime(self, tmp_path: Path) -> None:
+        settings = Settings(
+            environment="production",
+            engine=EngineKind.OFFICIAL,
+            require_cuda=False,
+            api_key_file=Path("/run/secrets/api_key"),
+            vad_provider=VADKind.WEBRTC,
+            **local_artifacts(tmp_path),
+        )
+
+        assert settings.engine is EngineKind.OFFICIAL
+        assert settings.require_cuda is False
 
 
 class TestVADSelection:
@@ -234,7 +246,7 @@ class TestVADSelection:
         artifacts = local_artifacts(tmp_path)
         common = {
             "environment": "production",
-            "engine": EngineKind.ORT,
+            "engine": EngineKind.OFFICIAL,
             "api_key_file": Path("/run/secrets/api_key"),
             **artifacts,
         }

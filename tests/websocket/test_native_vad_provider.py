@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -10,6 +12,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api.websocket import WebSocketConfig
+from app.api.websocket import connection as websocket_connection
+from app.engine.base import TranscriptionRequest
 from app.vad.base import VADCapacityError, VADClosedError, VADInferenceError
 from tests.support.asgi import SchedulerDouble, realtime_only_app
 from tests.support.audio import silence_frame, speech_frame
@@ -20,6 +24,8 @@ from tests.support.realtime import REALTIME_PATH, RealtimeDriver
 class ScriptedVADStream:
     scores: list[float] = field(default_factory=list)
     failure: Exception | None = None
+    reset_failure: Exception | None = None
+    close_failure: Exception | None = None
     scored_frames: list[bytes] = field(default_factory=list)
     resets: int = 0
     closes: int = 0
@@ -34,9 +40,13 @@ class ScriptedVADStream:
 
     def reset(self) -> None:
         self.resets += 1
+        if self.reset_failure is not None:
+            raise self.reset_failure
 
     def close(self) -> None:
         self.closes += 1
+        if self.close_failure is not None:
+            raise self.close_failure
 
 
 @dataclass(slots=True)
@@ -258,3 +268,83 @@ def test_vad_runtime_failure_stops_before_any_scheduler_submission(failure: Exce
     assert scheduler.finals == []
     assert len(provider.streams[0].scored_frames) == 1
     assert provider.streams[0].closes == 1
+
+
+def test_vad_reset_failure_uses_inference_error_and_1011_mapping() -> None:
+    provider = ScriptedVADProvider(
+        stream_factory=lambda: ScriptedVADStream(
+            [1.0], reset_failure=VADInferenceError("private reset fault")
+        )
+    )
+    scheduler = SchedulerDouble()
+    app = app_with_provider(provider, scheduler)
+    with TestClient(app) as client, client.websocket_connect(REALTIME_PATH) as socket:
+        realtime = RealtimeDriver(socket)
+        realtime.send_start(vad=True)
+        realtime.expect("session.ready")
+        realtime.send_frame(speech_frame())
+        realtime.send_commit()
+        error = realtime.expect_error("INFERENCE_ERROR")
+        assert error["retryable"] is True
+        realtime.expect_close(1011)
+    assert scheduler.finals == []
+
+
+class _BlockingPartialScheduler(SchedulerDouble):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started_event = threading.Event()
+        self.cancelled_event = threading.Event()
+
+    async def submit_partial(self, session_id: str, request: TranscriptionRequest):  # type: ignore[no-untyped-def]
+        self.partials.append(request)
+        self.started_event.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            self.cancelled_event.set()
+
+
+def test_partial_is_cancelled_and_gathered_even_when_vad_close_raises() -> None:
+    provider = ScriptedVADProvider(
+        stream_factory=lambda: ScriptedVADStream(
+            [1.0] * 20, close_failure=RuntimeError("private close fault")
+        )
+    )
+    scheduler = _BlockingPartialScheduler()
+    app = app_with_provider(provider, scheduler)
+    with TestClient(app) as client:
+        with client.websocket_connect(REALTIME_PATH) as socket:
+            realtime = RealtimeDriver(socket)
+            realtime.send_start(vad=True)
+            realtime.expect("session.ready")
+            realtime.send_frames([speech_frame()] * 20)
+            assert scheduler.started_event.wait(1.0)
+    assert scheduler.cancelled_event.wait(1.0)
+
+
+class _ErrorLogSpy:
+    def __init__(self) -> None:
+        self.errors: list[tuple[str, dict[str, object]]] = []
+
+    def error(self, event: str, **fields: object) -> None:
+        self.errors.append((event, fields))
+
+
+def test_unexpected_vad_fault_log_is_sanitized(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = ScriptedVADProvider(
+        stream_factory=lambda: ScriptedVADStream(failure=RuntimeError("secret audio fault"))
+    )
+    logger = _ErrorLogSpy()
+    monkeypatch.setattr(websocket_connection, "_LOGGER", logger)
+    app = app_with_provider(provider, SchedulerDouble())
+    with TestClient(app) as client, client.websocket_connect(REALTIME_PATH) as socket:
+        realtime = RealtimeDriver(socket)
+        realtime.send_start(vad=True)
+        realtime.expect("session.ready")
+        realtime.send_frame(speech_frame())
+        realtime.expect_error("INTERNAL_ERROR")
+        realtime.expect_close(1011)
+    assert logger.errors == [("realtime_session_failed", {"exception_type": "RuntimeError"})]

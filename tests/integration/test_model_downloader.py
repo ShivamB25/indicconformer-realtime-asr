@@ -11,11 +11,14 @@ from __future__ import annotations
 
 import json
 import stat
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+import scripts._atomic_directory as atomic_directory
 from tests.support.model_snapshot import (
     COMPLETE_NAME,
     LANGUAGES,
@@ -465,6 +468,36 @@ class TestPublishedDirectoryReuse:
         assert not destination.exists()
         leftovers = [path.name for path in tmp_path.iterdir() if path.name.startswith(".")]
         assert leftovers == []
+
+
+class TestAtomicPublication:
+    def test_parent_fsync_failure_after_rename_is_propagated(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        destination = tmp_path / "fresh-model"
+        token_file = write_token_file(tmp_path / "hf.token")
+
+        def snapshot_download(**arguments: Any) -> None:
+            assert arguments["repo_id"] == REPOSITORY
+            assert arguments["revision"] == REVISION
+            write_assets(Path(arguments["local_dir"]))
+
+        def fail_parent_fsync(path: Path) -> None:
+            assert path == tmp_path
+            raise OSError("parent fsync failed")
+
+        monkeypatch.setitem(
+            sys.modules,
+            "huggingface_hub",
+            SimpleNamespace(snapshot_download=snapshot_download),
+        )
+        monkeypatch.setattr(atomic_directory, "fsync_directory", fail_parent_fsync)
+
+        with pytest.raises(OSError, match="parent fsync failed"):
+            download_model(destination, REPOSITORY, REVISION, token_file)
+
+        assert verify_model(destination)["revision"] == REVISION
+        assert list(tmp_path.glob(".fresh-model.staging-*")) == []
 
 
 class TestManifestJsonShape:

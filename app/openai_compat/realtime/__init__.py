@@ -24,7 +24,6 @@ from app.openai_compat.realtime.schemas import (
 from app.openai_compat.realtime.state import (
     RealtimeSessionState,
     TurnSnapshot,
-    frame_is_speech,
 )
 
 __all__ = [
@@ -49,5 +48,4 @@ __all__ = [
     "TranscriptionDeltaEvent",
     "TranscriptionFailedEvent",
     "TurnSnapshot",
-    "frame_is_speech",
 ]

@@ -43,6 +43,7 @@ _SENSITIVE_KEYS = frozenset(
         "waveform",
     }
 )
+_UVICORN_LOGGERS = ("uvicorn", "uvicorn.error", "uvicorn.access")
 
 
 def _sensitive_key(key: object) -> bool:
@@ -99,6 +100,65 @@ def _safe_exception(
     return event_dict
 
 
+class _AccessMetadataFilter(logging.Filter):
+    """Capture bounded access metadata before logging consumes ``record.args``."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.name != "uvicorn.access":
+            return True
+        args = record.args
+        if not isinstance(args, tuple) or len(args) < 5:
+            return True
+        method, status_code = args[1], args[4]
+        if (
+            isinstance(method, str)
+            and 0 < len(method) <= 16
+            and method.isascii()
+            and method.isalpha()
+        ):
+            record._asr_http_method = method.upper()
+        if (
+            isinstance(status_code, int)
+            and not isinstance(status_code, bool)
+            and 100 <= status_code <= 599
+        ):
+            record._asr_status_code = status_code
+        return True
+
+
+def _sanitize_foreign_event(
+    logger: WrappedLogger,
+    method_name: str,
+    event_dict: EventDict,
+) -> EventDict:
+    """Replace unstructured library messages before rendering.
+
+    A stdlib ``LogRecord`` has already interpolated its arguments by the time
+    ProcessorFormatter invokes the foreign chain. The resulting message may
+    contain exception text, URLs, or request data. Keep bounded metadata while
+    replacing that uncontrolled message with a stable event.
+    """
+
+    del logger, method_name
+    if event_dict.get("_from_structlog") is not False:
+        return event_dict
+
+    record = event_dict.get("_record")
+    if isinstance(record, logging.LogRecord) and record.name == "uvicorn.access":
+        event_dict["event"] = "http_access"
+        method = getattr(record, "_asr_http_method", None)
+        status_code = getattr(record, "_asr_status_code", None)
+        if isinstance(method, str):
+            event_dict["http_method"] = method
+        if isinstance(status_code, int):
+            event_dict["status_code"] = status_code
+    elif isinstance(record, logging.LogRecord) and record.name.startswith("uvicorn"):
+        event_dict["event"] = "server_log"
+    else:
+        event_dict["event"] = "external_log"
+    return event_dict
+
+
 def _log_level(level: str | int) -> int:
     if isinstance(level, bool):
         raise ValueError("log level must be a name or integer")
@@ -108,6 +168,12 @@ def _log_level(level: str | int) -> int:
     if resolved is None:
         raise ValueError(f"unknown log level: {level}")
     return resolved
+
+
+def _remove_handlers(logger: logging.Logger) -> None:
+    for handler in tuple(logger.handlers):
+        logger.removeHandler(handler)
+        handler.close()
 
 
 def configure_logging(
@@ -125,6 +191,7 @@ def configure_logging(
         structlog.stdlib.add_logger_name,
         structlog.processors.TimeStamper(fmt="iso", utc=True),
         _safe_exception,
+        _sanitize_foreign_event,
         redact_sensitive,
     ]
     renderer: Processor
@@ -138,15 +205,21 @@ def configure_logging(
         processors=[ProcessorFormatter.remove_processors_meta, renderer],
     )
     handler = logging.StreamHandler(stream or sys.stdout)
+    handler.addFilter(_AccessMetadataFilter())
     handler.setFormatter(formatter)
     handler.setLevel(numeric_level)
 
     root = logging.getLogger()
-    for existing in tuple(root.handlers):
-        root.removeHandler(existing)
-        existing.close()
+    _remove_handlers(root)
     root.addHandler(handler)
     root.setLevel(numeric_level)
+
+    for logger_name in _UVICORN_LOGGERS:
+        uvicorn_logger = logging.getLogger(logger_name)
+        _remove_handlers(uvicorn_logger)
+        uvicorn_logger.setLevel(logging.NOTSET)
+        uvicorn_logger.disabled = False
+        uvicorn_logger.propagate = True
 
     structlog.configure(
         processors=[*shared, ProcessorFormatter.wrap_for_formatter],

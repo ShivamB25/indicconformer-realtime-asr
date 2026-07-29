@@ -17,6 +17,7 @@ from app.api.auth import require_http_api_key
 from app.core.config import Settings
 from app.core.types import Decoder, LanguageCode, ProcessingMode
 from app.engine.base import TranscriptionRequest
+from app.engine.scheduler import ServerBusyError
 from app.observability.metrics import MetricCode
 from app.openai_compat import MODEL_ID, OpenAIError, validate_model
 from app.openai_compat.audio import (
@@ -308,7 +309,15 @@ async def create_transcription(request: Request) -> Response:
             error_type="server_error",
             code="timeout",
         ) from exc
-    except RuntimeError as exc:
+    except ServerBusyError as exc:
+        metrics.record_rejection(MetricCode.SERVER_BUSY)
+        raise OpenAIError(
+            "Transcription is unavailable",
+            status_code=503,
+            error_type="server_error",
+            code="server_busy",
+        ) from exc
+    except Exception as exc:
         metrics.record_error(MetricCode.INFERENCE_ERROR)
         raise OpenAIError(
             "Transcription is unavailable",

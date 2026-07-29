@@ -7,8 +7,9 @@ name: image
 #     the image; they are mounted read-only at /models/indicconformer at runtime.
 #   * Pull requests build and audit only. Login/push/attestation steps are
 #     skipped, so a fork PR cannot obtain registry write access.
-#   * Every published image carries semantic tags, an immutable sha-<commit> tag,
-#     an SBOM, SLSA provenance, and a registry-pushed GitHub attestation.
+#   * Builds publish only an immutable sha-<commit> staging tag. Semantic release
+#     tags are promoted from that exact digest only after the protected GPU gate.
+#   * Published digests carry an SBOM, SLSA provenance, and GitHub attestation.
 
 on:
   push:
@@ -18,9 +19,13 @@ on:
     paths:
       - deploy/**
       - app/**
+      - scripts/**
       - pyproject.toml
       - uv.lock
+      - .python-version
+      - .dockerignore
       - .github/workflows/image.yml
+      - .github/workflows/gpu-smoke.yml
   workflow_dispatch:
   workflow_call:
     outputs:
@@ -96,8 +101,8 @@ jobs:
         run: |
           set -uo pipefail
           rc=0
-          # Both supported runtime bases are immutable. RUNTIME_IMAGE selects one
-          # of these defaults (or another explicitly digest-pinned base).
+          # Both supported official runtime bases are immutable. RUNTIME_IMAGE
+          # selects one default (or another explicitly digest-pinned base).
           for argument in CUDA_IMAGE CPU_IMAGE; do
             if grep -qE "^[[:space:]]*ARG[[:space:]]+${argument}=" "${DOCKERFILE}"; then
               default="$(grep -E "^[[:space:]]*ARG[[:space:]]+${argument}=" "${DOCKERFILE}" | head -1 | cut -d= -f2- | tr -d "\"' ")"
@@ -174,18 +179,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Derive tags and labels
+      - name: Derive immutable staging tag and labels
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ steps.name.outputs.image }}
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
             type=sha,format=long,prefix=sha-
-            type=ref,event=branch
-            type=ref,event=pr
-            type=raw,value=latest,enable={{is_default_branch}}
           labels: |
             org.opencontainers.image.title=indicconformer-realtime-asr
             org.opencontainers.image.description=IndicConformer ASR serving image (weights mounted at runtime)
@@ -204,6 +204,15 @@ jobs:
           cache-from: type=gha,scope=image-amd64
           cache-to: type=gha,scope=image-amd64,mode=max
           provenance: false
+          build-args: |
+            UV_EXTRA=official-gpu
+            ASR_ENGINE=official
+            ASR_REQUIRE_CUDA=true
+            APT_SNAPSHOT_URL=${{ vars.APT_SNAPSHOT_URL }}
+            APT_CA_CERTIFICATES_VERSION=${{ vars.APT_CA_CERTIFICATES_VERSION }}
+            APT_LIBGOMP1_VERSION=${{ vars.APT_LIBGOMP1_VERSION }}
+            APT_LIBSNDFILE1_VERSION=${{ vars.APT_LIBSNDFILE1_VERSION }}
+            APT_TINI_VERSION=${{ vars.APT_TINI_VERSION }}
           # No `secrets:` and no Hugging Face build args, by design.
 
       - name: Audit image for baked-in weights and credentials
@@ -309,7 +318,7 @@ jobs:
           docker export "${cid}" | python3 /tmp/audit_image.py
           rm -f /tmp/audit_image.py
 
-      - name: Publish with SBOM and provenance
+      - name: Publish immutable SHA staging image with SBOM and provenance
         id: push
         if: ${{ github.event_name != 'pull_request' }}
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
@@ -325,6 +334,15 @@ jobs:
           cache-to: type=gha,scope=image-amd64,mode=max
           sbom: true
           provenance: mode=max
+          build-args: |
+            UV_EXTRA=official-gpu
+            ASR_ENGINE=official
+            ASR_REQUIRE_CUDA=true
+            APT_SNAPSHOT_URL=${{ vars.APT_SNAPSHOT_URL }}
+            APT_CA_CERTIFICATES_VERSION=${{ vars.APT_CA_CERTIFICATES_VERSION }}
+            APT_LIBGOMP1_VERSION=${{ vars.APT_LIBGOMP1_VERSION }}
+            APT_LIBSNDFILE1_VERSION=${{ vars.APT_LIBSNDFILE1_VERSION }}
+            APT_TINI_VERSION=${{ vars.APT_TINI_VERSION }}
 
       # GitHub's attestation API rejects user-owned private repositories. Buildx
       # still publishes the OCI SBOM and provenance attestations above; persist
@@ -370,7 +388,7 @@ jobs:
             echo "${{ steps.name.outputs.image }}@${{ steps.push.outputs.digest }}"
             echo '```'
             echo ""
-            echo "Tags:"
+            echo "Staging tag (release tags are absent until the GPU gate succeeds):"
             echo ""
             echo '```'
             echo "${{ steps.meta.outputs.tags }}"
@@ -400,3 +418,49 @@ jobs:
       model_revision: ${{ vars.GPU_SMOKE_MODEL_REVISION }}
       run_benchmark: true
     secrets: inherit
+
+  promote-release-tags:
+    name: Promote semantic release tags
+    if: ${{ startsWith(github.ref, 'refs/tags/v') && needs.gpu-release-gate.result == 'success' }}
+    needs: [build, gpu-release-gate]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@371161bbe7024a29a25c5e19bfcbc0804fe9ad2c # v4.5.2
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive gated semantic tags
+        id: release-meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ needs.build.outputs.image }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+
+      - name: Promote the tested digest without rebuilding
+        env:
+          IMAGE: ${{ needs.build.outputs.image }}
+          DIGEST: ${{ needs.build.outputs.digest }}
+          RELEASE_TAGS: ${{ steps.release-meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          test -n "${DIGEST}" || { echo "::error::staging digest is empty"; exit 1; }
+          tags=()
+          while IFS= read -r tag; do
+            test -n "${tag}" && tags+=(--tag "${tag}")
+          done <<< "${RELEASE_TAGS}"
+          test "${#tags[@]}" -gt 0 || { echo "::error::no semantic release tags were derived"; exit 1; }
+          docker buildx imagetools create "${tags[@]}" "${IMAGE}@${DIGEST}"
+          echo "Promoted ${IMAGE}@${DIGEST} only after the GPU release gate succeeded."

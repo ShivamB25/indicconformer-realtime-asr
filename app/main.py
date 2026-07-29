@@ -9,8 +9,10 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.health import router as health_router
+from app.api.http_admission import HTTPAdmissionMiddleware
 from app.api.openai import router as openai_router
-from app.api.openai_realtime import router as openai_realtime_router
+from app.api.openai_realtime import create_openai_realtime_router
+from app.api.realtime import ConnectionRegistry
 from app.api.rest import router as rest_router
 from app.api.websocket import WebSocketConfig, create_websocket_router
 from app.core.config import Settings, get_settings
@@ -142,15 +144,17 @@ def create_app(
     application.state.engine = None
     application.state.scheduler = None
     application.state.vad_provider = None
+    websocket_config = WebSocketConfig(vad_threshold=runtime_settings.vad_speech_threshold)
+    realtime_connections = ConnectionRegistry(websocket_config.max_sessions)
+    application.state.realtime_connections = realtime_connections
     install_metrics(application)
+    application.add_middleware(HTTPAdmissionMiddleware)
     application.include_router(health_router)
     application.include_router(rest_router)
     application.include_router(openai_router)
-    application.include_router(openai_realtime_router)
+    application.include_router(create_openai_realtime_router(registry=realtime_connections))
     application.include_router(
-        create_websocket_router(
-            config=WebSocketConfig(vad_threshold=runtime_settings.vad_speech_threshold)
-        )
+        create_websocket_router(config=websocket_config, registry=realtime_connections)
     )
     configure_openapi(application)
     return application

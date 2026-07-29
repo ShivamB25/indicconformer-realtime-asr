@@ -111,6 +111,59 @@ class TestReadinessTransitions:
         response = client.get("/health/ready")
         return response.status_code, str(response.json()["stage"])
 
+    def test_readiness_is_refused_while_scheduler_close_is_blocked(self) -> None:
+        threading = __import__("threading")
+
+        class BlockingCloseScheduler(SchedulerDouble):
+            def __init__(self) -> None:
+                super().__init__()
+                self.close_entered = threading.Event()
+
+            async def close(self) -> None:
+                asyncio = __import__("asyncio")
+                self.closed += 1
+                self.loop = asyncio.get_running_loop()
+                self.release_close = asyncio.Event()
+                self.close_entered.set()
+                await self.release_close.wait()
+
+            def release(self) -> None:
+                if self.close_entered.is_set():
+                    self.loop.call_soon_threadsafe(self.release_close.set)
+
+        scheduler = BlockingCloseScheduler()
+        app = scheduler_app(scheduler)
+        shutdown_errors: list[BaseException] = []
+
+        def run_lifespan() -> None:
+            try:
+                with TestClient(app):
+                    pass
+            except BaseException as exc:
+                shutdown_errors.append(exc)
+
+        shutdown = threading.Thread(target=run_lifespan)
+        shutdown.start()
+        try:
+            assert scheduler.close_entered.wait(timeout=5)
+            response = TestClient(app).get("/health/ready")
+            assert response.status_code == 503
+            assert response.json() == {
+                "status": "not_ready",
+                "stage": "stopping",
+                "checks": {
+                    "engine": CheckStatus.STOPPING,
+                    "scheduler": CheckStatus.STOPPING,
+                },
+                "detail": None,
+            }
+        finally:
+            scheduler.release()
+            shutdown.join(timeout=5)
+
+        assert not shutdown.is_alive()
+        assert shutdown_errors == []
+
 
 class TestReadinessReflectsDependencies:
     def test_an_engine_that_never_reports_ready_keeps_the_service_unready(self) -> None:

@@ -16,6 +16,7 @@ from typing import Any
 import anyio
 from fastapi import FastAPI
 
+from app.api.realtime import ConnectionRegistry
 from app.api.websocket import WebSocketConfig, create_websocket_router
 from app.core.config import Settings
 from app.engine.base import Engine, TranscriptionRequest, TranscriptionResult
@@ -85,8 +86,11 @@ def realtime_only_app(scheduler: Any = None, config: WebSocketConfig | None = No
             await provider.close()
 
     application = FastAPI(lifespan=lifespan)
+    effective_config = config or WebSocketConfig()
+    registry = ConnectionRegistry(effective_config.max_sessions)
     application.state.vad_provider = provider
-    application.include_router(create_websocket_router(scheduler, config))
+    application.state.realtime_connections = registry
+    application.include_router(create_websocket_router(scheduler, effective_config, registry))
     return application
 
 

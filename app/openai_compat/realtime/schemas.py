@@ -17,6 +17,7 @@ class StrictModel(BaseModel):
 
 EventId = Annotated[str, Field(min_length=1, max_length=128)]
 LanguageValue = Annotated[LanguageCode, Field(strict=False)]
+ModelValue = Annotated[str, Field(min_length=1, max_length=256)]
 
 
 class PCMFormat(StrictModel):
@@ -24,25 +25,16 @@ class PCMFormat(StrictModel):
     rate: Literal[24_000]
 
 
-class TranscriptionConfig(StrictModel):
-    model: Annotated[str, Field(min_length=1, max_length=256)]
+class TranscriptionConfigPatch(StrictModel):
+    model: ModelValue | None = None
     languages: Annotated[list[LanguageValue], Field(min_length=1, max_length=1)] | None = None
     language: LanguageValue | None = None
 
     @model_validator(mode="after")
-    def exactly_one_language_spelling(self) -> TranscriptionConfig:
-        if self.languages is not None and self.language is not None:
+    def one_language_spelling_at_most(self) -> TranscriptionConfigPatch:
+        if {"language", "languages"}.issubset(self.model_fields_set):
             raise ValueError("language and languages cannot be used together")
-        if self.languages is None and self.language is None:
-            raise ValueError("exactly one language is required")
         return self
-
-    @property
-    def selected_language(self) -> LanguageCode:
-        if self.languages is not None:
-            return self.languages[0]
-        assert self.language is not None
-        return self.language
 
 
 class ServerVAD(StrictModel):
@@ -52,19 +44,39 @@ class ServerVAD(StrictModel):
     silence_duration_ms: Annotated[int, Field(strict=True, ge=100, le=5_000)] = 500
 
 
-class AudioInputConfig(StrictModel):
-    format: PCMFormat
-    transcription: TranscriptionConfig
+class AudioInputConfigPatch(StrictModel):
+    format: PCMFormat | None = None
+    transcription: TranscriptionConfigPatch | None = None
     turn_detection: ServerVAD | None = None
 
+    @model_validator(mode="after")
+    def nonnullable_objects_cannot_be_cleared(self) -> AudioInputConfigPatch:
+        for name in ("format", "transcription"):
+            if name in self.model_fields_set and getattr(self, name) is None:
+                raise ValueError(f"{name} cannot be null")
+        return self
 
-class AudioConfig(StrictModel):
-    input: AudioInputConfig
+
+class AudioConfigPatch(StrictModel):
+    input: AudioInputConfigPatch | None = None
+
+    @model_validator(mode="after")
+    def input_cannot_be_cleared(self) -> AudioConfigPatch:
+        if "input" in self.model_fields_set and self.input is None:
+            raise ValueError("input cannot be null")
+        return self
 
 
 class SessionUpdate(StrictModel):
-    type: Literal["transcription"]
-    audio: AudioConfig
+    type: Literal["transcription"] | None = None
+    audio: AudioConfigPatch | None = None
+
+    @model_validator(mode="after")
+    def session_objects_cannot_be_cleared(self) -> SessionUpdate:
+        for name in ("type", "audio"):
+            if name in self.model_fields_set and getattr(self, name) is None:
+                raise ValueError(f"{name} cannot be null")
+        return self
 
 
 class SessionUpdateEvent(StrictModel):

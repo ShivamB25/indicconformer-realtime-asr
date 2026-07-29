@@ -29,7 +29,7 @@ import urllib.parse
 import urllib.request
 import uuid
 import wave
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any, Final
 
 SCHEMA_VERSION: Final[str] = "1.0"
@@ -139,6 +139,33 @@ def _distribution(values: Sequence[float]) -> dict[str, float]:
     }
 
 
+def _read_api_key(path: pathlib.Path | None) -> str | None:
+    """Read one bounded bearer token without ever including it in diagnostics."""
+    if path is None:
+        return None
+    expanded = path.expanduser()
+    try:
+        if expanded.is_symlink() or not expanded.is_file():
+            raise BenchmarkError("API key path must be a regular file")
+        key = expanded.read_text(encoding="utf-8")
+    except BenchmarkError:
+        raise
+    except (OSError, UnicodeError):
+        raise BenchmarkError("API key file cannot be read") from None
+    if key.endswith("\r\n"):
+        key = key[:-2]
+    elif key.endswith("\n"):
+        key = key[:-1]
+    if (
+        len(key) < 32
+        or len(key) > 4096
+        or not key.isascii()
+        or any(character.isspace() for character in key)
+    ):
+        raise BenchmarkError("API key must contain one 32-4096 character ASCII token")
+    return key
+
+
 def _read_sample(path: pathlib.Path, language: str) -> Sample:
     if language not in LANGUAGES:
         raise BenchmarkError(f"unsupported language {language!r}")
@@ -230,17 +257,21 @@ def _transcribe(
     mode: str,
     decoder: str,
     timeout_seconds: float,
+    api_key: str | None,
 ) -> Measurement:
     body, boundary = _multipart_body(sample, mode)
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": f"multipart/form-data; boundary={boundary}",
+        "User-Agent": "indicconformer-realtime-asr-benchmark/1",
+    }
+    if api_key is not None:
+        headers["Authorization"] = f"Bearer {api_key}"
     request = urllib.request.Request(
         endpoint,
         data=body,
         method="POST",
-        headers={
-            "Accept": "application/json",
-            "Content-Type": f"multipart/form-data; boundary={boundary}",
-            "User-Agent": "indicconformer-realtime-asr-benchmark/1",
-        },
+        headers=headers,
     )
     started = time.perf_counter_ns()
     try:
@@ -248,9 +279,9 @@ def _transcribe(
             response_bytes = response.read()
     except urllib.error.HTTPError as exc:
         # Never read/log the response body: an error may contain a transcript.
-        raise BenchmarkError(f"transcription returned HTTP {exc.code} {exc.reason}") from exc
+        raise BenchmarkError(f"transcription returned HTTP {exc.code}") from exc
     except urllib.error.URLError as exc:
-        raise BenchmarkError(f"transcription endpoint unavailable: {exc.reason}") from exc
+        raise BenchmarkError("transcription endpoint unavailable") from exc
     latency_ms = (time.perf_counter_ns() - started) / 1_000_000
 
     try:
@@ -357,6 +388,7 @@ def _run_cell(
     decoder: str,
     warmup_requests: int,
     timeout_seconds: float,
+    api_key: str | None,
 ) -> dict[str, Any]:
     if warmup_requests:
         with concurrent.futures.ThreadPoolExecutor(
@@ -370,6 +402,7 @@ def _run_cell(
                     mode=mode,
                     decoder=decoder,
                     timeout_seconds=timeout_seconds,
+                    api_key=api_key,
                 )
                 for index in range(warmup_requests)
             ]
@@ -392,6 +425,7 @@ def _run_cell(
                     mode=mode,
                     decoder=decoder,
                     timeout_seconds=timeout_seconds,
+                    api_key=api_key,
                 )
             )
         return measurements
@@ -432,7 +466,7 @@ def _run_cell(
 
 def _threshold_failures(cell: dict[str, Any], args: argparse.Namespace) -> list[str]:
     label = f"mode={cell['mode']},decoder={cell['decoder']},concurrency={cell['concurrency']}"
-    checks = (
+    checks: tuple[tuple[str, float, float | None, Callable[[float, float], bool], str], ...] = (
         (
             "max_p95_latency_ms",
             cell["latency_ms"]["p95"],
@@ -477,6 +511,11 @@ def _parser() -> argparse.ArgumentParser:
     source.add_argument("--manifest", type=pathlib.Path, help="JSON workload manifest")
     source.add_argument("--audio", type=pathlib.Path, help="single mono PCM16 16 kHz WAV")
     parser.add_argument("--language", choices=LANGUAGES, help="language for --audio")
+    parser.add_argument(
+        "--api-key-file",
+        type=pathlib.Path,
+        help="regular file containing the bearer key; the value is never logged",
+    )
     parser.add_argument(
         "--concurrency",
         action="append",
@@ -558,6 +597,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.request_timeout_seconds <= 0 or args.ready_timeout_seconds <= 0:
             raise BenchmarkError("timeouts must be positive")
 
+        api_key = _read_api_key(args.api_key_file)
         samples = _load_samples(args)
         base_url = args.base_url.rstrip("/") + "/"
         endpoint = urllib.parse.urljoin(base_url, "v1/transcribe")
@@ -583,6 +623,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 decoder=decoder,
                 warmup_requests=args.warmup_requests,
                 timeout_seconds=args.request_timeout_seconds,
+                api_key=api_key,
             )
             cells.append(cell)
             failures.extend(_threshold_failures(cell, args))

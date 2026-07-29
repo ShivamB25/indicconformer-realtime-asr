@@ -17,6 +17,7 @@ NOT_READY_STATUSES = [
     CheckStatus.PENDING,
     CheckStatus.STARTING,
     CheckStatus.FAILED,
+    CheckStatus.STOPPING,
     CheckStatus.STOPPED,
 ]
 
@@ -39,6 +40,7 @@ class TestInitialState:
             "ready",
             "disabled",
             "failed",
+            "stopping",
             "stopped",
         ]
 

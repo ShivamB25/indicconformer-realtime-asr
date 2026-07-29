@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -21,6 +20,7 @@ from app.openai_compat.realtime.schemas import (
 )
 
 _OPENAI_SAMPLE_RATE: Literal[24_000] = 24_000
+_BYTES_PER_MILLISECOND = _OPENAI_SAMPLE_RATE * 2 // 1_000
 _VAD_FRAME_BYTES = _OPENAI_SAMPLE_RATE * 2 * 20 // 1_000
 
 
@@ -33,8 +33,6 @@ class TurnSnapshot:
     client_event_id: str | None
     pcm16: bytes
     language: LanguageCode
-    model: str
-    duration_ms: int
 
     def to_engine_audio(self) -> np.ndarray:
         samples = np.frombuffer(self.pcm16, dtype="<i2").astype(np.float32)
@@ -56,6 +54,7 @@ class RealtimeSessionState:
     turn_detection: ServerVAD | None = field(default_factory=lambda: ServerVAD(type="server_vad"))
     audio: bytearray = field(default_factory=bytearray)
     total_audio_bytes: int = 0
+    buffer_start_bytes: int = 0
     previous_item_id: str | None = None
     pending_item_id: str | None = None
     vad_scan_bytes: int = 0
@@ -67,21 +66,36 @@ class RealtimeSessionState:
     def configured(self) -> bool:
         return self.language is not None
 
-    @property
-    def audio_duration_ms(self) -> int:
-        return len(self.audio) * 1_000 // (_OPENAI_SAMPLE_RATE * 2)
+    def apply_update(self, update: SessionUpdate, canonical_model: str | None) -> None:
+        """Merge a session.update patch, then validate and publish it atomically."""
 
-    @property
-    def total_audio_seconds(self) -> float:
-        return self.total_audio_bytes / (_OPENAI_SAMPLE_RATE * 2)
-
-    def apply_update(self, update: SessionUpdate, canonical_model: str) -> None:
         if self.audio:
             raise ValueError("session cannot be updated while the input audio buffer is nonempty")
-        source = update.audio.input
-        self.model = canonical_model
-        self.language = source.transcription.selected_language
-        self.turn_detection = source.turn_detection
+        model = self.model
+        language = self.language
+        turn_detection = self.turn_detection
+        audio_patch = update.audio
+        input_patch = None if audio_patch is None else audio_patch.input
+        if input_patch is not None:
+            transcription = input_patch.transcription
+            if transcription is not None:
+                if "model" in transcription.model_fields_set:
+                    if canonical_model is None:
+                        raise ValueError("transcription model cannot be null")
+                    model = canonical_model
+                if "languages" in transcription.model_fields_set:
+                    language = (
+                        None if transcription.languages is None else transcription.languages[0]
+                    )
+                elif "language" in transcription.model_fields_set:
+                    language = transcription.language
+            if "turn_detection" in input_patch.model_fields_set:
+                turn_detection = input_patch.turn_detection
+        if language is None:
+            raise ValueError("exactly one transcription language is required")
+        self.model = model
+        self.language = language
+        self.turn_detection = turn_detection
         self.reset_vad()
 
     def append(self, payload: bytes) -> None:
@@ -95,6 +109,7 @@ class RealtimeSessionState:
 
     def clear(self) -> None:
         self.audio.clear()
+        self.buffer_start_bytes = self.total_audio_bytes
         self.pending_item_id = None
         self.reset_vad()
 
@@ -112,9 +127,21 @@ class RealtimeSessionState:
             return None
         frame = bytes(self.audio[self.vad_scan_bytes : end])
         self.vad_scan_bytes = end
-        buffered_before_turn = self.total_audio_bytes - len(self.audio)
-        absolute_end_ms = (buffered_before_turn + end) * 1_000 // (_OPENAI_SAMPLE_RATE * 2)
+        absolute_end_ms = (self.buffer_start_bytes + end) * 1_000 // (_OPENAI_SAMPLE_RATE * 2)
         return frame, absolute_end_ms
+
+    def trim_pre_speech(self, prefix_padding_ms: int) -> None:
+        """Keep only bounded prefix plus speech-start debounce audio before a turn."""
+
+        retained = (
+            prefix_padding_ms * _BYTES_PER_MILLISECOND + self.speech_run_frames * _VAD_FRAME_BYTES
+        )
+        discard = max(0, self.vad_scan_bytes - retained)
+        if discard == 0:
+            return
+        del self.audio[:discard]
+        self.buffer_start_bytes += discard
+        self.vad_scan_bytes -= discard
 
     def snapshot(
         self, *, item_id: str, client_event_id: str | None, byte_count: int | None = None
@@ -124,19 +151,19 @@ class RealtimeSessionState:
         size = len(self.audio) if byte_count is None else byte_count
         if size <= 0:
             raise ValueError("input audio buffer is empty")
+        if size > len(self.audio):
+            raise ValueError("input audio buffer commit exceeds buffered audio")
         if size % 2:
             raise ValueError("PCM16 audio must contain complete samples")
         pcm = bytes(self.audio[:size])
         del self.audio[:size]
-        duration_ms = round(size * 1_000 / (_OPENAI_SAMPLE_RATE * 2))
+        self.buffer_start_bytes += size
         snapshot = TurnSnapshot(
             item_id=item_id,
             previous_item_id=self.previous_item_id,
             client_event_id=client_event_id,
             pcm16=pcm,
             language=self.language,
-            model=self.model,
-            duration_ms=duration_ms,
         )
         self.previous_item_id = item_id
         self.pending_item_id = None
@@ -156,12 +183,3 @@ class RealtimeSessionState:
                 )
             ),
         )
-
-
-def frame_is_speech(frame: memoryview, threshold: float) -> bool:
-    """Classify one 20 ms, 24 kHz PCM16LE frame without retaining it."""
-
-    samples = np.frombuffer(frame, dtype="<i2")
-    normalized = samples.astype(np.float64) / 32_768.0
-    rms = float(np.sqrt(np.mean(np.square(normalized), dtype=np.float64)))
-    return rms >= threshold or math.isclose(rms, threshold, rel_tol=1e-7)

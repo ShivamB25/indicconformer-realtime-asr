@@ -1,8 +1,112 @@
 name: indicconformer-realtime-asr
 
+x-build-args: &build-args
+  APT_SNAPSHOT_URL: ${APT_SNAPSHOT_URL:-}
+  APT_CA_CERTIFICATES_VERSION: ${APT_CA_CERTIFICATES_VERSION:-}
+  APT_LIBGOMP1_VERSION: ${APT_LIBGOMP1_VERSION:-}
+  APT_LIBSNDFILE1_VERSION: ${APT_LIBSNDFILE1_VERSION:-}
+  APT_TINI_VERSION: ${APT_TINI_VERSION:-}
+
+x-asr-environment: &asr-environment
+  ASR_ENVIRONMENT: production
+  ASR_ENGINE: official
+  ASR_HOST: 0.0.0.0
+  ASR_PORT: "8000"
+  ASR_MODEL_DIR: /models/indicconformer
+  ASR_MODEL_MANIFEST: /models/indicconformer/model-manifest.json
+  ASR_MODEL_REPO_ID: ${ASR_MODEL_REPO_ID:-ai4bharat/indic-conformer-600m-multilingual}
+  ASR_MODEL_REVISION: ${ASR_MODEL_REVISION:?ASR_MODEL_REVISION must be a full immutable commit SHA}
+  ASR_OFFLINE: "true"
+  ASR_VAD_PROVIDER: silero
+  ASR_VAD_MODEL_PATH: /models/vad/silero-v6.2.1/silero_vad.onnx
+  ASR_VAD_MODEL_SHA256: 1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3
+  ASR_WEBSOCKET_ALLOWED_ORIGINS: ${ASR_WEBSOCKET_ALLOWED_ORIGINS:-[]}
+  ASR_API_KEY_FILE: /run/secrets/api/api_key
+  HF_HUB_OFFLINE: "1"
+  TRANSFORMERS_OFFLINE: "1"
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  DO_NOT_TRACK: "1"
+  HOME: /tmp
+
+x-asr-common: &asr-common
+  image: ${ASR_IMAGE:-indicconformer-realtime-asr:local}
+  depends_on:
+    model-init:
+      condition: service_completed_successfully
+      restart: true
+  environment: *asr-environment
+  volumes:
+    - model-data:/models:ro
+    - api-key-data:/run/secrets/api:ro
+  ports:
+    - ${ASR_LISTEN_ADDRESS:-127.0.0.1}:${ASR_HOST_PORT:-8000}:8000
+  networks:
+    - serving
+  read_only: true
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev,size=256m,uid=10001,gid=10001
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  pids_limit: 512
+  mem_limit: ${ASR_MEMORY_LIMIT:-16g}
+  cpus: ${ASR_CPU_LIMIT:-4.0}
+  healthcheck:
+    test:
+      - CMD
+      - /app/.venv/bin/python
+      - -c
+      - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3).read()
+    interval: 30s
+    timeout: 5s
+    start_period: 60s
+    retries: 3
+  stop_grace_period: 180s
+  restart: unless-stopped
+
 services:
+  secret-init:
+    image: ${ASR_IMAGE:-indicconformer-realtime-asr:local}
+    user: 0:0
+    entrypoint:
+      - /usr/bin/tini
+      - --
+      - /bin/sh
+      - -euc
+    command:
+      - |
+        install -d -o 10001 -g 10001 -m 0700 /run/prepared-api /run/prepared-hf
+        install -o 10001 -g 10001 -m 0400 /run/secrets/api_key /run/prepared-api/api_key
+        install -o 10001 -g 10001 -m 0400 /run/secrets/huggingface_token /run/prepared-hf/huggingface_token
+    secrets:
+      - source: api_key
+        target: api_key
+      - source: huggingface_token
+        target: huggingface_token
+    volumes:
+      - api-key-data:/run/prepared-api
+      - hf-token-data:/run/prepared-hf
+    network_mode: none
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 32
+    mem_limit: 128m
+    cpus: 0.25
+    restart: "no"
+
   model-init:
     image: ${ASR_IMAGE:-indicconformer-realtime-asr:local}
+    depends_on:
+      secret-init:
+        condition: service_completed_successfully
     entrypoint:
       - /usr/bin/tini
       - --
@@ -13,7 +117,7 @@ services:
         /app/.venv/bin/python /app/scripts/download_model.py \
           --repository "$${ASR_MODEL_REPO_ID}" \
           --revision "$${ASR_MODEL_REVISION}" \
-          --token-file /run/secrets/huggingface_token \
+          --token-file /run/secrets/hf/huggingface_token \
           --output-dir /models/indicconformer
         /app/.venv/bin/python /app/scripts/download_vad_model.py \
           --output-dir /models/vad/silero-v6.2.1
@@ -24,11 +128,11 @@ services:
       TRANSFORMERS_OFFLINE: "0"
       HF_HUB_DISABLE_TELEMETRY: "1"
       DO_NOT_TRACK: "1"
-    secrets:
-      - source: huggingface_token
-        target: huggingface_token
     volumes:
       - model-data:/models
+      - hf-token-data:/run/secrets/hf:ro
+    networks:
+      - provisioning
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=128m,uid=10001,gid=10001
@@ -41,56 +145,22 @@ services:
     cpus: 2.0
     restart: "no"
 
-  asr:
-    image: ${ASR_IMAGE:-indicconformer-realtime-asr:local}
+  asr-gpu:
+    <<: *asr-common
+    profiles:
+      - gpu
     build:
       context: ..
       dockerfile: deploy/Dockerfile
       args:
+        <<: *build-args
         CUDA_IMAGE: ${CUDA_IMAGE:-nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04@sha256:2fcc4280646484290cc50dce5e65f388dd04352b07cbe89a635703bd1f9aedb6}
-    depends_on:
-      model-init:
-        condition: service_completed_successfully
-        restart: true
+        UV_EXTRA: official-gpu
+        ASR_ENGINE: official
+        ASR_REQUIRE_CUDA: "true"
     environment:
-      ASR_ENVIRONMENT: production
-      ASR_ENGINE: ort
-      ASR_HOST: 0.0.0.0
-      ASR_PORT: "8000"
-      ASR_MODEL_DIR: /models/indicconformer
-      ASR_MODEL_MANIFEST: /models/indicconformer/model-manifest.json
-      ASR_MODEL_REPO_ID: ${ASR_MODEL_REPO_ID:-ai4bharat/indic-conformer-600m-multilingual}
-      ASR_MODEL_REVISION: ${ASR_MODEL_REVISION:?ASR_MODEL_REVISION must be a full immutable commit SHA}
-      ASR_OFFLINE: "true"
+      <<: *asr-environment
       ASR_REQUIRE_CUDA: "true"
-      ASR_VAD_PROVIDER: silero
-      ASR_VAD_MODEL_PATH: /models/vad/silero-v6.2.1/silero_vad.onnx
-      ASR_VAD_MODEL_SHA256: 1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3
-      ASR_WEBSOCKET_ALLOWED_ORIGINS: ${ASR_WEBSOCKET_ALLOWED_ORIGINS:-[]}
-      ASR_API_KEY_FILE: /run/secrets/api_key
-      HF_HUB_OFFLINE: "1"
-      TRANSFORMERS_OFFLINE: "1"
-      HF_HUB_DISABLE_TELEMETRY: "1"
-      DO_NOT_TRACK: "1"
-      HOME: /tmp
-    volumes:
-      - model-data:/models:ro
-    secrets:
-      - source: api_key
-        target: api_key
-        mode: 0400
-    ports:
-      - ${ASR_LISTEN_ADDRESS:-127.0.0.1}:${ASR_HOST_PORT:-8000}:8000
-    read_only: true
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,nodev,size=256m,uid=10001,gid=10001
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
-    pids_limit: 512
-    mem_limit: ${ASR_MEMORY_LIMIT:-16g}
-    cpus: ${ASR_CPU_LIMIT:-4.0}
     deploy:
       resources:
         reservations:
@@ -99,18 +169,23 @@ services:
               count: 1
               capabilities:
                 - gpu
-    healthcheck:
-      test:
-        - CMD
-        - /app/.venv/bin/python
-        - -c
-        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3).read()
-      interval: 30s
-      timeout: 5s
-      start_period: 60s
-      retries: 3
-    stop_grace_period: 30s
-    restart: unless-stopped
+
+  asr-cpu:
+    <<: *asr-common
+    profiles:
+      - cpu
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args:
+        <<: *build-args
+        RUNTIME_IMAGE: ${CPU_IMAGE:-ubuntu:22.04@sha256:0e0a0fc6d18feda9db1590da249ac93e8d5abfea8f4c3c0c849ce512b5ef8982}
+        UV_EXTRA: official-cpu
+        ASR_ENGINE: official
+        ASR_REQUIRE_CUDA: "false"
+    environment:
+      <<: *asr-environment
+      ASR_REQUIRE_CUDA: "false"
 
 secrets:
   huggingface_token:
@@ -120,3 +195,10 @@ secrets:
 
 volumes:
   model-data:
+  api-key-data:
+  hf-token-data:
+
+networks:
+  provisioning:
+  serving:
+    internal: true

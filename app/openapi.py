@@ -26,10 +26,14 @@ AI4Bharat IndicConformer speech-to-text service for 22 supported Indic languages
 OpenAPI cannot execute WebSocket protocols. Two authenticated WebSocket endpoints
 are available:
 
-- `WS /v1/realtime`: binary PCM16LE, mono, 16 kHz, exact 20 ms / 640-byte
+- `WS /v1/realtime/native`: binary PCM16LE, mono, 16 kHz, exact 20 ms / 640-byte
   frames; native `session.start` and `input.commit` JSON control events.
-- `WS /v1/realtime/transcription_sessions`: base64 PCM16LE, mono, 24 kHz;
+- `WS /v1/realtime`: base64 PCM16LE, mono, 24 kHz;
   OpenAI-compatible transcription-session events.
+
+Every realtime session must select one supported language explicitly. The pinned
+checkpoint has no language-identification head; automatic detection is future
+work that requires a separately trained and calibrated 22-class model.
 
 WebSocket clients send `Authorization: Bearer <token>` during the upgrade when an
 API key is configured. ASR and VAD model weights are provisioned separately and
@@ -151,12 +155,12 @@ def configure_openapi(application: FastAPI) -> None:
                     operation["security"] = [{"BearerAuth": []}, {}]
         schema["x-websocket-endpoints"] = [
             {
-                "url": "/v1/realtime",
+                "url": "/v1/realtime/native",
                 "protocol": "native-pcm16-16khz",
                 "documentation": "Service description and README realtime protocol section",
             },
             {
-                "url": "/v1/realtime/transcription_sessions",
+                "url": "/v1/realtime",
                 "protocol": "openai-transcription-session-pcm16-24khz",
                 "documentation": "Service description and README OpenAI realtime section",
             },

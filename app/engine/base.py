@@ -7,10 +7,24 @@ from enum import StrEnum
 from typing import Protocol, runtime_checkable
 
 import numpy as np
+from numpy.typing import NDArray
 
 from app.core.types import SUPPORTED_LANGUAGE_CODES
 
 ProgressCallback = Callable[[str], None]
+_PCM16_MIN = np.float32(-1.0)
+_PCM16_MAX = np.float32(32_767 / 32_768)
+
+
+def normalize_pcm16_audio(audio: np.ndarray) -> NDArray[np.float32]:
+    """Return finite, contiguous float32 audio within the PCM16-normalized range."""
+
+    normalized = np.ascontiguousarray(audio, dtype=np.float32)
+    if not np.isfinite(normalized).all():
+        raise ValueError("audio samples must be finite")
+    if (normalized < _PCM16_MIN).any() or (normalized > _PCM16_MAX).any():
+        normalized = np.clip(normalized, _PCM16_MIN, _PCM16_MAX)
+    return normalized
 
 
 @dataclass(frozen=True, slots=True)

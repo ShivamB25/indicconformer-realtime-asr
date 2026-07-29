@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import asyncio
+import threading
 from collections.abc import Callable
 
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
+from app.engine.base import TranscriptionRequest
 from app.vad.base import VADCapacityError, VADInferenceError
 from tests.support.asgi import SchedulerDouble, scheduler_app
 from tests.support.openai_realtime import OPENAI_TRANSCRIPTION_PATH, OpenAIRealtimeDriver
@@ -22,10 +25,14 @@ class VADStreamDouble:
         scorer: Callable[[bytes], float] | None = None,
         error: Exception | None = None,
         on_close: Callable[[], None] | None = None,
+        reset_error: Exception | None = None,
+        close_error: Exception | None = None,
     ) -> None:
         self._scorer = scorer or (lambda frame: 0.0)
         self._error = error
         self._on_close = on_close
+        self._reset_error = reset_error
+        self._close_error = close_error
         self.frames: list[bytes] = []
         self.resets = 0
         self.closes = 0
@@ -39,6 +46,8 @@ class VADStreamDouble:
 
     def reset(self) -> None:
         self.resets += 1
+        if self._reset_error is not None:
+            raise self._reset_error
 
     def close(self) -> None:
         if self.closed:
@@ -47,6 +56,8 @@ class VADStreamDouble:
         self.closes += 1
         if self._on_close is not None:
             self._on_close()
+        if self._close_error is not None:
+            raise self._close_error
 
 
 class VADProviderDouble:
@@ -285,3 +296,120 @@ def test_vad_stream_capacity_failure_closes_1013_without_fallback() -> None:
             assert error["error"]["event_id"] == "capacity-update"
             realtime.expect_close(1013)
     assert provider.streams == []
+
+
+def test_prefix_padding_bounds_committed_audio_and_preserves_absolute_timestamps() -> None:
+    def classify(frame: bytes) -> float:
+        return 1.0 if any(frame) else 0.0
+
+    provider = VADProviderDouble(lambda release: VADStreamDouble(classify, on_close=release))
+    scheduler = SchedulerDouble()
+    app = scheduler_app(scheduler)
+    with TestClient(app) as client:
+        app.state.vad_provider = provider
+        with client.websocket_connect(OPENAI_TRANSCRIPTION_PATH) as socket:
+            rt = OpenAIRealtimeDriver(socket)
+            rt.expect("session.created")
+            rt.update(
+                turn_detection={
+                    "type": "server_vad",
+                    "threshold": 0.5,
+                    "prefix_padding_ms": 40,
+                    "silence_duration_ms": 100,
+                }
+            )
+            rt.expect("session.updated")
+            rt.append(pcm24(400, 0.0) + pcm24(60) + pcm24(100, 0.0))
+            started = rt.expect("input_audio_buffer.speech_started")
+            stopped = rt.expect("input_audio_buffer.speech_stopped")
+            rt.expect("input_audio_buffer.committed")
+            rt.expect("conversation.item.input_audio_transcription.delta")
+            completed = rt.expect("conversation.item.input_audio_transcription.completed")
+
+    assert started["audio_start_ms"] == 360
+    assert stopped["audio_end_ms"] == 560
+    assert completed["usage"]["seconds"] == 0.2
+    assert scheduler.finals[0].audio.size == 3_200
+
+
+@pytest.mark.parametrize("action", ["update", "clear", "manual", "automatic"])
+def test_every_vad_reset_failure_emits_server_error_and_closes_1011(action: str) -> None:
+    def classify(frame: bytes) -> float:
+        return 1.0 if any(frame) else 0.0
+
+    provider = VADProviderDouble(
+        lambda release: VADStreamDouble(
+            classify,
+            on_close=release,
+            reset_error=VADInferenceError("reset fault must stay private"),
+        )
+    )
+    app = scheduler_app(SchedulerDouble())
+    with TestClient(app) as client:
+        app.state.vad_provider = provider
+        with client.websocket_connect(OPENAI_TRANSCRIPTION_PATH) as socket:
+            rt = OpenAIRealtimeDriver(socket)
+            rt.expect("session.created")
+            rt.update(turn_detection=SERVER_VAD, event_id="enable")
+            rt.expect("session.updated")
+            if action == "update":
+                rt.update(turn_detection=SERVER_VAD, event_id="reset-update")
+                causal = "reset-update"
+            elif action == "clear":
+                rt.clear("reset-clear")
+                causal = "reset-clear"
+            elif action == "manual":
+                rt.append(pcm24(20), "audio")
+                rt.commit("reset-manual")
+                causal = "reset-manual"
+            else:
+                rt.append(pcm24(60) + pcm24(100, 0.0), "reset-automatic")
+                rt.expect("input_audio_buffer.speech_started")
+                rt.expect("input_audio_buffer.speech_stopped")
+                causal = "reset-automatic"
+            error = rt.expect_error("vad_inference_failed")
+            assert error["error"]["type"] == "server_error"
+            assert error["error"]["event_id"] == causal
+            rt.expect_close(1011)
+
+
+class _CancellableScheduler(SchedulerDouble):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started_event = threading.Event()
+        self.cancelled_event = threading.Event()
+
+    async def submit_final(self, session_id: str, request: TranscriptionRequest):  # type: ignore[no-untyped-def]
+        self.finals.append(request)
+        self.started_event.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            self.cancelled_event.set()
+
+
+def test_inference_tasks_are_cancelled_and_gathered_even_when_vad_close_raises() -> None:
+    provider = VADProviderDouble(
+        lambda release: VADStreamDouble(
+            scorer=lambda _: 1.0,
+            on_close=release,
+            close_error=RuntimeError("private close fault"),
+        )
+    )
+    scheduler = _CancellableScheduler()
+    app = scheduler_app(scheduler)
+    with TestClient(app) as client:
+        app.state.vad_provider = provider
+        with client.websocket_connect(OPENAI_TRANSCRIPTION_PATH) as socket:
+            rt = OpenAIRealtimeDriver(socket)
+            rt.expect("session.created")
+            rt.update(turn_detection=SERVER_VAD)
+            rt.expect("session.updated")
+            rt.append(pcm24(60))
+            rt.expect("input_audio_buffer.speech_started")
+            rt.commit()
+            rt.expect("input_audio_buffer.speech_stopped")
+            rt.expect("input_audio_buffer.committed")
+            assert scheduler.started_event.wait(1.0)
+    assert scheduler.cancelled_event.wait(1.0)
+    assert provider.active_streams == 0

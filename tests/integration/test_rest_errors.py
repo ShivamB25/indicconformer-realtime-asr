@@ -17,6 +17,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
+from app.api import rest as rest_api
 from app.schemas.rest import ErrorResponse, TranscriptionResponse
 from tests.support.asgi import (
     SchedulerDouble,
@@ -270,6 +271,20 @@ class TestSizeAndDurationLimits:
         assert response.status_code == 200, response.text
         assert response.json()["audio_duration_ms"] == 1_000
 
+    @pytest.mark.parametrize("containerized", [False, True])
+    def test_oversize_pcm_is_rejected_before_float_allocation(
+        self, monkeypatch: pytest.MonkeyPatch, containerized: bool
+    ) -> None:
+        pcm = pcm_bytes_for_ms(1_020)
+        payload = wav_bytes(pcm) if containerized else pcm
+
+        def allocation_would_be_a_bug(*_: object, **__: object) -> object:
+            raise AssertionError("oversize PCM reached NumPy conversion")
+
+        monkeypatch.setattr(rest_api.np, "frombuffer", allocation_would_be_a_bug)  # type: ignore[attr-defined]
+        with pytest.raises(OverflowError, match="duration exceeds"):
+            rest_api._decode_pcm_upload(payload, max_samples=16_000)
+
 
 class TestServiceAvailability:
     def test_a_request_before_startup_is_refused(self) -> None:
@@ -314,6 +329,28 @@ class TestServiceAvailability:
 
         assert set(body) == {"error", "request_id"}
         assert "text" not in body
+
+    def test_queue_saturation_is_one_bounded_rejection_metric(self) -> None:
+        with TestClient(scheduler_app(busy_scheduler())) as client:
+            response = post(client, language="hi")
+            metrics = client.get("/metrics").text
+
+        assert response.status_code == 503
+        assert 'asr_rejections_total{code="server_busy"} 1.0' in metrics
+        assert 'asr_errors_total{code="inference_error"}' not in metrics
+
+    def test_non_runtime_engine_exceptions_are_safe_inference_failures(self) -> None:
+        scheduler = SchedulerDouble(final_error=ValueError("private engine detail"))
+        with TestClient(scheduler_app(scheduler)) as client:
+            response = post(client, language="hi")
+            metrics = client.get("/metrics").text
+
+        assert response.status_code == 503
+        assert ErrorResponse.model_validate_json(response.text).error == (
+            "transcription is unavailable"
+        )
+        assert "private engine detail" not in response.text
+        assert 'asr_errors_total{code="inference_error"} 1.0' in metrics
 
 
 class TestEngineOnlyFallback:

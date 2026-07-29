@@ -31,6 +31,12 @@ class Scheduler(Protocol):
         request: TranscriptionRequest,
     ) -> TranscriptionResult: ...
 
+    async def submit_partial(
+        self,
+        session_id: str,
+        request: TranscriptionRequest,
+    ) -> TranscriptionResult: ...
+
 
 def _build_engine(settings: Settings) -> Engine:
     if settings.engine is EngineKind.MOCK:
@@ -55,18 +61,6 @@ def _build_engine(settings: Settings) -> Engine:
             repo_id=settings.model_repo_id,
             revision=settings.model_revision,
             require_cuda=settings.require_cuda,
-        )
-
-    if settings.engine is EngineKind.ORT:
-        from app.engine.ort_engine import OrtIndicConformerEngine
-
-        return OrtIndicConformerEngine(
-            model_dir=settings.model_dir,
-            manifest_path=settings.model_manifest,
-            repo_id=settings.model_repo_id,
-            revision=settings.model_revision,
-            require_cuda=settings.require_cuda,
-            allow_cpu=(not settings.require_cuda and settings.environment != "production"),
         )
 
     raise RuntimeError(f"unsupported engine: {settings.engine}")
@@ -143,7 +137,11 @@ def build_lifespan(
             tracker.update(stage="failed", detail=type(exc).__name__)
             raise
         finally:
-            tracker.update(stage="stopping")
+            tracker.update(
+                stage="stopping",
+                engine=CheckStatus.STOPPING,
+                scheduler=CheckStatus.STOPPING,
+            )
             try:
                 if active_scheduler is not None:
                     await active_scheduler.close()

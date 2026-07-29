@@ -20,12 +20,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-cpu = [
-    "onnxruntime==1.20.1",
-]
-gpu = [
-    "onnxruntime-gpu==1.20.2",
-]
 official-cpu = [
     "onnxruntime==1.20.1",
     "torch==2.5.1",
@@ -69,26 +63,6 @@ default = true
 [tool.uv]
 package = false
 conflicts = [
-    [
-        { extra = "cpu" },
-        { extra = "gpu" },
-    ],
-    [
-        { extra = "cpu" },
-        { extra = "official-cpu" },
-    ],
-    [
-        { extra = "cpu" },
-        { extra = "official-gpu" },
-    ],
-    [
-        { extra = "gpu" },
-        { extra = "official-cpu" },
-    ],
-    [
-        { extra = "gpu" },
-        { extra = "official-gpu" },
-    ],
     [
         { extra = "official-cpu" },
         { extra = "official-gpu" },

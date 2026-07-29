@@ -406,8 +406,13 @@ class InferenceScheduler:
             raise ValueError("session_id must contain 1 to 128 characters")
 
     def _publish_queue_depth(self) -> None:
-        if self._metrics is not None:
+        if self._metrics is None:
+            return
+        try:
             self._metrics.set_queue_depth(self._queued_count)
+        except Exception:
+            # Metrics are observational and must never alter scheduler state or cleanup.
+            pass
 
     def _require_running(self) -> None:
         if not self._running:

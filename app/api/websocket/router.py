@@ -2,24 +2,29 @@
 
 from fastapi import APIRouter, WebSocket
 
+from app.api.realtime import ConnectionRegistry
 from app.api.websocket.connection import _serve_websocket
-from app.api.websocket.state import WebSocketConfig, _SessionRegistry
+from app.api.websocket.state import WebSocketConfig
 from app.engine.scheduler import InferenceScheduler
 
 
 def create_websocket_router(
-    scheduler: InferenceScheduler | None = None, config: WebSocketConfig | None = None
+    scheduler: InferenceScheduler | None = None,
+    config: WebSocketConfig | None = None,
+    registry: ConnectionRegistry | None = None,
 ) -> APIRouter:
-    """Create a router, optionally binding a scheduler for isolated tests."""
+    """Create a native router, optionally binding dependencies for isolated tests."""
 
     effective_config = config or WebSocketConfig()
-    registry = _SessionRegistry(effective_config.max_sessions)
     result = APIRouter(tags=["realtime"])
 
-    @result.websocket("/v1/realtime")
+    @result.websocket("/v1/realtime/native")
     async def realtime_endpoint(websocket: WebSocket) -> None:
         resolved = scheduler or getattr(websocket.app.state, "scheduler", None)
-        await _serve_websocket(websocket, resolved, effective_config, registry)
+        shared_registry = registry or getattr(websocket.app.state, "realtime_connections", None)
+        if shared_registry is None:
+            raise RuntimeError("application realtime connection registry is not configured")
+        await _serve_websocket(websocket, resolved, effective_config, shared_registry)
 
     return result
 

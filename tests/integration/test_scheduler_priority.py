@@ -150,6 +150,28 @@ class TestLifecycle:
         with pytest.raises(ValueError, match="session_id must contain 1 to 128"):
             await scheduler.submit_partial(session_id, make_request())
 
+    async def test_metrics_failure_cannot_interrupt_close(
+        self, recording_engine: BatchingMockEngine
+    ) -> None:
+        class FailingMetrics:
+            def __init__(self) -> None:
+                self.depths: list[int] = []
+
+            def set_queue_depth(self, depth: int) -> None:
+                self.depths.append(depth)
+                raise RuntimeError("metrics backend unavailable")
+
+        metrics = FailingMetrics()
+        scheduler = InferenceScheduler(recording_engine, IMMEDIATE, metrics=metrics)
+        await scheduler.start()
+
+        await scheduler.close()
+
+        assert scheduler.running is False
+        assert metrics.depths == [0, 0]
+        with pytest.raises(SchedulerClosedError):
+            await scheduler.submit_final("after-close", make_request())
+
 
 class TestPriority:
     async def test_a_final_overtakes_an_already_queued_partial(

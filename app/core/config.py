@@ -53,8 +53,7 @@ class Settings(BaseSettings):
     def validate_engine_artifacts(self) -> Self:
         if self.environment == "production" and self.engine is EngineKind.MOCK:
             raise ValueError("the mock engine is not permitted in production")
-        if self.environment == "production" and not self.require_cuda:
-            raise ValueError("production engines require CUDA")
+
         if self.environment == "production":
             key_file = self.api_key_file
             if key_file is None or not key_file.is_absolute():
