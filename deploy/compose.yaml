@@ -6,18 +6,20 @@ services:
     entrypoint:
       - /usr/bin/tini
       - --
-      - /app/.venv/bin/python
-      - /app/scripts/download_model.py
+      - /bin/sh
+      - -euc
     command:
-      - --repository
-      - ${ASR_MODEL_REPO_ID:-ai4bharat/indic-conformer-600m-multilingual}
-      - --revision
-      - ${ASR_MODEL_REVISION:?ASR_MODEL_REVISION must be a full immutable commit SHA}
-      - --token-file
-      - /run/secrets/huggingface_token
-      - --output-dir
-      - /models/indicconformer
+      - |
+        /app/.venv/bin/python /app/scripts/download_model.py \
+          --repository "$${ASR_MODEL_REPO_ID}" \
+          --revision "$${ASR_MODEL_REVISION}" \
+          --token-file /run/secrets/huggingface_token \
+          --output-dir /models/indicconformer
+        /app/.venv/bin/python /app/scripts/download_vad_model.py \
+          --output-dir /models/vad/silero-v6.2.1
     environment:
+      ASR_MODEL_REPO_ID: ${ASR_MODEL_REPO_ID:-ai4bharat/indic-conformer-600m-multilingual}
+      ASR_MODEL_REVISION: ${ASR_MODEL_REVISION:?ASR_MODEL_REVISION must be a full immutable commit SHA}
       HF_HUB_OFFLINE: "0"
       TRANSFORMERS_OFFLINE: "0"
       HF_HUB_DISABLE_TELEMETRY: "1"
@@ -61,6 +63,9 @@ services:
       ASR_MODEL_REVISION: ${ASR_MODEL_REVISION:?ASR_MODEL_REVISION must be a full immutable commit SHA}
       ASR_OFFLINE: "true"
       ASR_REQUIRE_CUDA: "true"
+      ASR_VAD_PROVIDER: silero
+      ASR_VAD_MODEL_PATH: /models/vad/silero-v6.2.1/silero_vad.onnx
+      ASR_VAD_MODEL_SHA256: 1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3
       ASR_WEBSOCKET_ALLOWED_ORIGINS: ${ASR_WEBSOCKET_ALLOWED_ORIGINS:-[]}
       ASR_API_KEY_FILE: /run/secrets/api_key
       HF_HUB_OFFLINE: "1"

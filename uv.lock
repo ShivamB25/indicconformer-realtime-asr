@@ -2,12 +2,31 @@ version = 1
 revision = 3
 requires-python = "==3.11.*"
 resolution-markers = [
-    "platform_machine != 'aarch64' or platform_python_implementation != 'CPython' or sys_platform != 'linux'",
-    "platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux'",
+    "extra != 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu' and extra != 'extra-27-indicconformer-realtime-asr-official-cpu' and extra != 'extra-27-indicconformer-realtime-asr-official-gpu'",
+    "extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra != 'extra-27-indicconformer-realtime-asr-gpu' and extra != 'extra-27-indicconformer-realtime-asr-official-cpu' and extra != 'extra-27-indicconformer-realtime-asr-official-gpu'",
+    "(platform_machine != 'aarch64' and sys_platform == 'linux' and extra != 'extra-27-indicconformer-realtime-asr-cpu' and extra != 'extra-27-indicconformer-realtime-asr-gpu' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu' and extra != 'extra-27-indicconformer-realtime-asr-official-gpu') or (platform_python_implementation != 'CPython' and sys_platform == 'linux' and extra != 'extra-27-indicconformer-realtime-asr-cpu' and extra != 'extra-27-indicconformer-realtime-asr-gpu' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu' and extra != 'extra-27-indicconformer-realtime-asr-official-gpu') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra != 'extra-27-indicconformer-realtime-asr-cpu' and extra != 'extra-27-indicconformer-realtime-asr-gpu' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu' and extra != 'extra-27-indicconformer-realtime-asr-official-gpu')",
+    "(platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra != 'extra-27-indicconformer-realtime-asr-cpu' and extra != 'extra-27-indicconformer-realtime-asr-gpu' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu' and extra != 'extra-27-indicconformer-realtime-asr-official-gpu') or (sys_platform == 'darwin' and extra != 'extra-27-indicconformer-realtime-asr-cpu' and extra != 'extra-27-indicconformer-realtime-asr-gpu' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu' and extra != 'extra-27-indicconformer-realtime-asr-official-gpu')",
+    "(platform_machine != 'aarch64' and extra != 'extra-27-indicconformer-realtime-asr-cpu' and extra != 'extra-27-indicconformer-realtime-asr-gpu' and extra != 'extra-27-indicconformer-realtime-asr-official-cpu') or (platform_python_implementation != 'CPython' and extra != 'extra-27-indicconformer-realtime-asr-cpu' and extra != 'extra-27-indicconformer-realtime-asr-gpu' and extra != 'extra-27-indicconformer-realtime-asr-official-cpu') or (sys_platform != 'linux' and extra != 'extra-27-indicconformer-realtime-asr-cpu' and extra != 'extra-27-indicconformer-realtime-asr-gpu' and extra != 'extra-27-indicconformer-realtime-asr-official-cpu')",
+    "platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra != 'extra-27-indicconformer-realtime-asr-cpu' and extra != 'extra-27-indicconformer-realtime-asr-gpu' and extra != 'extra-27-indicconformer-realtime-asr-official-cpu'",
 ]
 conflicts = [[
     { package = "indicconformer-realtime-asr", extra = "cpu" },
     { package = "indicconformer-realtime-asr", extra = "gpu" },
+], [
+    { package = "indicconformer-realtime-asr", extra = "cpu" },
+    { package = "indicconformer-realtime-asr", extra = "official-cpu" },
+], [
+    { package = "indicconformer-realtime-asr", extra = "cpu" },
+    { package = "indicconformer-realtime-asr", extra = "official-gpu" },
+], [
+    { package = "indicconformer-realtime-asr", extra = "gpu" },
+    { package = "indicconformer-realtime-asr", extra = "official-cpu" },
+], [
+    { package = "indicconformer-realtime-asr", extra = "gpu" },
+    { package = "indicconformer-realtime-asr", extra = "official-gpu" },
+], [
+    { package = "indicconformer-realtime-asr", extra = "official-cpu" },
+    { package = "indicconformer-realtime-asr", extra = "official-gpu" },
 ]]
 
 [[package]]
@@ -70,7 +89,7 @@ name = "cffi"
 version = "2.1.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pycparser", marker = "implementation_name != 'PyPy' or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu')" },
+    { name = "pycparser", marker = "implementation_name != 'PyPy' or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu') or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu') or (extra == 'extra-27-indicconformer-realtime-asr-gpu' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu') or (extra == 'extra-27-indicconformer-realtime-asr-gpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu') or (extra == 'extra-27-indicconformer-realtime-asr-official-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/57/5f/ff100cae70ebe9d8df1c01a00e510e45d9adb5c1fdda84791b199141de97/cffi-2.1.0.tar.gz", hash = "sha256:efc1cdd798b1aaf39b4610bba7aad28c9bea9b910f25c784ccf9ec1fa719d1f9", size = 531036, upload-time = "2026-07-06T21:34:30.382Z" }
 wheels = [
@@ -116,7 +135,7 @@ name = "click"
 version = "8.4.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu')" },
+    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu') or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu') or (extra == 'extra-27-indicconformer-realtime-asr-gpu' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu') or (extra == 'extra-27-indicconformer-realtime-asr-gpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu') or (extra == 'extra-27-indicconformer-realtime-asr-official-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/76/d4/81420972a676e8ffea40450d8c8c92943e7218a78fe9b64359836cc9876b/click-8.4.2.tar.gz", hash = "sha256:9a6cea6e60b17ebe0a44c5cc636d94f09bd66142c1cd7d8b4cd731c4917a15f6", size = 338000, upload-time = "2026-06-24T17:45:15.148Z" }
 wheels = [
@@ -299,7 +318,7 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "filelock" },
     { name = "fsspec" },
-    { name = "hf-xet", marker = "platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'arm64' or platform_machine == 'x86_64' or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu')" },
+    { name = "hf-xet", marker = "platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'arm64' or platform_machine == 'x86_64' or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu') or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu') or (extra == 'extra-27-indicconformer-realtime-asr-gpu' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu') or (extra == 'extra-27-indicconformer-realtime-asr-gpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu') or (extra == 'extra-27-indicconformer-realtime-asr-official-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu')" },
     { name = "packaging" },
     { name = "pyyaml" },
     { name = "requests" },
@@ -349,6 +368,7 @@ dependencies = [
     { name = "soxr" },
     { name = "structlog" },
     { name = "uvicorn", extra = ["standard"] },
+    { name = "webrtcvad-wheels" },
 ]
 
 [package.optional-dependencies]
@@ -358,11 +378,20 @@ cpu = [
 gpu = [
     { name = "onnxruntime-gpu" },
 ]
+official-cpu = [
+    { name = "onnxruntime" },
+    { name = "torch", version = "2.5.1", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu') or (platform_machine != 'aarch64' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu') or (platform_python_implementation != 'CPython' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu') or (sys_platform == 'darwin' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu') or (sys_platform != 'linux' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu') or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu') or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu') or (extra == 'extra-27-indicconformer-realtime-asr-gpu' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu') or (extra == 'extra-27-indicconformer-realtime-asr-gpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu')" },
+    { name = "torch", version = "2.5.1+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'aarch64' and sys_platform == 'linux' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu') or (platform_python_implementation != 'CPython' and sys_platform == 'linux' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu') or (sys_platform == 'darwin' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu') or (sys_platform == 'linux' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu') or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu') or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu') or (extra == 'extra-27-indicconformer-realtime-asr-gpu' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu') or (extra == 'extra-27-indicconformer-realtime-asr-gpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu')" },
+    { name = "torchaudio", version = "2.5.1", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu') or (platform_machine != 'aarch64' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu') or (platform_python_implementation != 'CPython' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu') or (sys_platform == 'darwin' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu') or (sys_platform != 'linux' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu') or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu') or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu') or (extra == 'extra-27-indicconformer-realtime-asr-gpu' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu') or (extra == 'extra-27-indicconformer-realtime-asr-gpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu')" },
+    { name = "torchaudio", version = "2.5.1+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'aarch64' and sys_platform == 'linux' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu') or (platform_python_implementation != 'CPython' and sys_platform == 'linux' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu') or (sys_platform == 'darwin' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu') or (sys_platform == 'linux' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu') or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu') or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu') or (extra == 'extra-27-indicconformer-realtime-asr-gpu' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu') or (extra == 'extra-27-indicconformer-realtime-asr-gpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu')" },
+    { name = "transformers" },
+]
 official-gpu = [
-    { name = "torch", version = "2.5.1", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "(platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux') or (platform_machine != 'aarch64' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (platform_python_implementation != 'CPython' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (sys_platform != 'linux' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu')" },
-    { name = "torch", version = "2.5.1+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "platform_machine != 'aarch64' or platform_python_implementation != 'CPython' or sys_platform != 'linux' or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu')" },
-    { name = "torchaudio", version = "2.5.1", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "(platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux') or (platform_machine != 'aarch64' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (platform_python_implementation != 'CPython' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (sys_platform != 'linux' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu')" },
-    { name = "torchaudio", version = "2.5.1+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "platform_machine != 'aarch64' or platform_python_implementation != 'CPython' or sys_platform != 'linux' or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu')" },
+    { name = "onnxruntime-gpu" },
+    { name = "torch", version = "2.5.1", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "(platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra != 'extra-27-indicconformer-realtime-asr-cpu' and extra != 'extra-27-indicconformer-realtime-asr-gpu' and extra != 'extra-27-indicconformer-realtime-asr-official-cpu') or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu') or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu') or (extra == 'extra-27-indicconformer-realtime-asr-gpu' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu') or (extra == 'extra-27-indicconformer-realtime-asr-gpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu') or (extra == 'extra-27-indicconformer-realtime-asr-official-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu')" },
+    { name = "torch", version = "2.5.1+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "(platform_machine != 'aarch64' and extra != 'extra-27-indicconformer-realtime-asr-cpu' and extra != 'extra-27-indicconformer-realtime-asr-gpu' and extra != 'extra-27-indicconformer-realtime-asr-official-cpu') or (platform_python_implementation != 'CPython' and extra != 'extra-27-indicconformer-realtime-asr-cpu' and extra != 'extra-27-indicconformer-realtime-asr-gpu' and extra != 'extra-27-indicconformer-realtime-asr-official-cpu') or (sys_platform != 'linux' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu') or (sys_platform != 'linux' and extra != 'extra-27-indicconformer-realtime-asr-cpu' and extra != 'extra-27-indicconformer-realtime-asr-gpu' and extra != 'extra-27-indicconformer-realtime-asr-official-cpu') or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu') or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu') or (extra == 'extra-27-indicconformer-realtime-asr-gpu' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu') or (extra == 'extra-27-indicconformer-realtime-asr-gpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu') or (extra == 'extra-27-indicconformer-realtime-asr-official-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu')" },
+    { name = "torchaudio", version = "2.5.1", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "(platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra != 'extra-27-indicconformer-realtime-asr-cpu' and extra != 'extra-27-indicconformer-realtime-asr-gpu' and extra != 'extra-27-indicconformer-realtime-asr-official-cpu') or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu') or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu') or (extra == 'extra-27-indicconformer-realtime-asr-gpu' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu') or (extra == 'extra-27-indicconformer-realtime-asr-gpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu') or (extra == 'extra-27-indicconformer-realtime-asr-official-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu')" },
+    { name = "torchaudio", version = "2.5.1+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "(platform_machine != 'aarch64' and extra != 'extra-27-indicconformer-realtime-asr-cpu' and extra != 'extra-27-indicconformer-realtime-asr-gpu' and extra != 'extra-27-indicconformer-realtime-asr-official-cpu') or (platform_python_implementation != 'CPython' and extra != 'extra-27-indicconformer-realtime-asr-cpu' and extra != 'extra-27-indicconformer-realtime-asr-gpu' and extra != 'extra-27-indicconformer-realtime-asr-official-cpu') or (sys_platform != 'linux' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu') or (sys_platform != 'linux' and extra != 'extra-27-indicconformer-realtime-asr-cpu' and extra != 'extra-27-indicconformer-realtime-asr-gpu' and extra != 'extra-27-indicconformer-realtime-asr-official-cpu') or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu') or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu') or (extra == 'extra-27-indicconformer-realtime-asr-gpu' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu') or (extra == 'extra-27-indicconformer-realtime-asr-gpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu') or (extra == 'extra-27-indicconformer-realtime-asr-official-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu')" },
     { name = "transformers" },
 ]
 
@@ -385,20 +414,26 @@ requires-dist = [
     { name = "huggingface-hub", specifier = ">=0.26.0,<2" },
     { name = "numpy", specifier = ">=1.26.0,<3" },
     { name = "onnx", specifier = "==1.20.1" },
-    { name = "onnxruntime", marker = "extra == 'cpu'", specifier = "==1.20.1" },
-    { name = "onnxruntime-gpu", marker = "extra == 'gpu'", specifier = "==1.20.1" },
+    { name = "onnxruntime", marker = "extra == 'cpu'", specifier = "==1.20.1", index = "https://pypi.org/simple" },
+    { name = "onnxruntime", marker = "extra == 'official-cpu'", specifier = "==1.20.1", index = "https://pypi.org/simple" },
+    { name = "onnxruntime-gpu", marker = "extra == 'gpu'", specifier = "==1.20.2", index = "https://pypi.org/simple" },
+    { name = "onnxruntime-gpu", marker = "extra == 'official-gpu'", specifier = "==1.20.2", index = "https://pypi.org/simple" },
     { name = "prometheus-client", specifier = ">=0.21.0,<1" },
     { name = "pydantic-settings", specifier = ">=2.6.0,<3" },
     { name = "python-multipart", specifier = ">=0.0.18,<1" },
     { name = "soundfile", specifier = ">=0.12.1,<1" },
     { name = "soxr", specifier = ">=0.5.0,<1" },
     { name = "structlog", specifier = ">=24.4.0,<26" },
-    { name = "torch", marker = "extra == 'official-gpu'", specifier = "==2.5.1", index = "https://download.pytorch.org/whl/cu124" },
-    { name = "torchaudio", marker = "extra == 'official-gpu'", specifier = "==2.5.1", index = "https://download.pytorch.org/whl/cu124" },
+    { name = "torch", marker = "extra == 'official-cpu'", specifier = "==2.5.1", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "indicconformer-realtime-asr", extra = "official-cpu" } },
+    { name = "torch", marker = "extra == 'official-gpu'", specifier = "==2.5.1", index = "https://download.pytorch.org/whl/cu124", conflict = { package = "indicconformer-realtime-asr", extra = "official-gpu" } },
+    { name = "torchaudio", marker = "extra == 'official-cpu'", specifier = "==2.5.1", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "indicconformer-realtime-asr", extra = "official-cpu" } },
+    { name = "torchaudio", marker = "extra == 'official-gpu'", specifier = "==2.5.1", index = "https://download.pytorch.org/whl/cu124", conflict = { package = "indicconformer-realtime-asr", extra = "official-gpu" } },
+    { name = "transformers", marker = "extra == 'official-cpu'", specifier = ">=4.46.0,<5" },
     { name = "transformers", marker = "extra == 'official-gpu'", specifier = ">=4.46.0,<5" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30.0,<1" },
+    { name = "webrtcvad-wheels", specifier = "==2.0.14" },
 ]
-provides-extras = ["cpu", "gpu", "official-gpu"]
+provides-extras = ["cpu", "gpu", "official-cpu", "official-gpu"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -529,7 +564,7 @@ name = "mypy"
 version = "1.20.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "librt", marker = "platform_python_implementation != 'PyPy' or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu')" },
+    { name = "librt", marker = "platform_python_implementation != 'PyPy' or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu') or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu') or (extra == 'extra-27-indicconformer-realtime-asr-gpu' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu') or (extra == 'extra-27-indicconformer-realtime-asr-gpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu') or (extra == 'extra-27-indicconformer-realtime-asr-official-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu')" },
     { name = "mypy-extensions" },
     { name = "pathspec" },
     { name = "typing-extensions" },
@@ -635,7 +670,7 @@ name = "nvidia-cudnn-cu12"
 version = "9.1.0.70"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-cublas-cu12", marker = "platform_machine != 'aarch64' or platform_python_implementation != 'CPython' or sys_platform != 'linux' or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu')" },
+    { name = "nvidia-cublas-cu12", marker = "platform_machine != 'aarch64' or platform_python_implementation != 'CPython' or sys_platform != 'linux'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/9f/fd/713452cd72343f682b1c7b9321e23829f00b842ceaedcda96e742ea0b0b3/nvidia_cudnn_cu12-9.1.0.70-py3-none-manylinux2014_x86_64.whl", hash = "sha256:165764f44ef8c61fcdfdfdbe769d687e06374059fbb388b6c89ecb0e28793a6f", size = 664752741, upload-time = "2024-04-22T15:24:15.253Z" },
@@ -647,7 +682,7 @@ name = "nvidia-cufft-cu12"
 version = "11.2.1.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-nvjitlink-cu12", marker = "platform_machine != 'aarch64' or platform_python_implementation != 'CPython' or sys_platform != 'linux' or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu')" },
+    { name = "nvidia-nvjitlink-cu12", marker = "platform_machine != 'aarch64' or platform_python_implementation != 'CPython' or sys_platform != 'linux'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/7a/8a/0e728f749baca3fbeffad762738276e5df60851958be7783af121a7221e7/nvidia_cufft_cu12-11.2.1.3-py3-none-manylinux2014_aarch64.whl", hash = "sha256:5dad8008fc7f92f5ddfa2101430917ce2ffacd86824914c82e28990ad7f00399", size = 211422548, upload-time = "2024-06-18T19:33:39.396Z" },
@@ -670,9 +705,9 @@ name = "nvidia-cusolver-cu12"
 version = "11.6.1.9"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-cublas-cu12", marker = "platform_machine != 'aarch64' or platform_python_implementation != 'CPython' or sys_platform != 'linux' or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu')" },
-    { name = "nvidia-cusparse-cu12", marker = "platform_machine != 'aarch64' or platform_python_implementation != 'CPython' or sys_platform != 'linux' or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu')" },
-    { name = "nvidia-nvjitlink-cu12", marker = "platform_machine != 'aarch64' or platform_python_implementation != 'CPython' or sys_platform != 'linux' or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu')" },
+    { name = "nvidia-cublas-cu12", marker = "platform_machine != 'aarch64' or platform_python_implementation != 'CPython' or sys_platform != 'linux'" },
+    { name = "nvidia-cusparse-cu12", marker = "platform_machine != 'aarch64' or platform_python_implementation != 'CPython' or sys_platform != 'linux'" },
+    { name = "nvidia-nvjitlink-cu12", marker = "platform_machine != 'aarch64' or platform_python_implementation != 'CPython' or sys_platform != 'linux'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/46/6b/a5c33cf16af09166845345275c34ad2190944bcc6026797a39f8e0a282e0/nvidia_cusolver_cu12-11.6.1.9-py3-none-manylinux2014_aarch64.whl", hash = "sha256:d338f155f174f90724bbde3758b7ac375a70ce8e706d70b018dd3375545fc84e", size = 127634111, upload-time = "2024-06-18T19:35:01.793Z" },
@@ -685,7 +720,7 @@ name = "nvidia-cusparse-cu12"
 version = "12.3.1.170"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-nvjitlink-cu12", marker = "platform_machine != 'aarch64' or platform_python_implementation != 'CPython' or sys_platform != 'linux' or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu')" },
+    { name = "nvidia-nvjitlink-cu12", marker = "platform_machine != 'aarch64' or platform_python_implementation != 'CPython' or sys_platform != 'linux'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/96/a9/c0d2f83a53d40a4a41be14cea6a0bf9e668ffcf8b004bd65633f433050c0/nvidia_cusparse_cu12-12.3.1.170-py3-none-manylinux2014_aarch64.whl", hash = "sha256:9d32f62896231ebe0480efd8a7f702e143c98cfaa0e8a76df3386c1ba2b54df3", size = 207381987, upload-time = "2024-06-18T19:35:32.989Z" },
@@ -769,7 +804,7 @@ wheels = [
 
 [[package]]
 name = "onnxruntime-gpu"
-version = "1.20.1"
+version = "1.20.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "coloredlogs" },
@@ -780,8 +815,8 @@ dependencies = [
     { name = "sympy" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e0/a5/5c2287d61f359c7342e9d59d1e3dd728a982dea85f846c7af305a801c3ca/onnxruntime_gpu-1.20.1-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:1795e8bc6f9a1488a4d51d242edc4232a5ae60ec44ab4d4b0a7c65b3d17fcbff", size = 291519550, upload-time = "2024-11-21T01:13:00.489Z" },
-    { url = "https://files.pythonhosted.org/packages/be/33/6f21ea03dc4eeaa3f049127f5f17360c38799134eefd1e524f0296b23cb4/onnxruntime_gpu-1.20.1-cp311-cp311-win_amd64.whl", hash = "sha256:1348e6a0af9e8f5e8e1cfc379b70356ea40497932f5bc7f858501fe7940794ff", size = 279698022, upload-time = "2024-11-21T00:54:09.794Z" },
+    { url = "https://files.pythonhosted.org/packages/5e/53/9341b875b0ed29953485b43713e94b335a449c3770fed67dddb3c9b84af0/onnxruntime_gpu-1.20.2-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:85057c7006457bee14fc2a57417b7e4f396f10d9c1b08b11aae08ac2b825eeda", size = 291518407, upload-time = "2025-03-07T05:46:22.943Z" },
+    { url = "https://files.pythonhosted.org/packages/0b/7a/0999993ceae7bf191d5d63a4e1b2208596763d8e586aa7dc5cc091f960c0/onnxruntime_gpu-1.20.2-cp311-cp311-win_amd64.whl", hash = "sha256:d0eafd873e4336949c89e6c7429a68e7e1d0233d9cb363e9780ca76c3c6f865c", size = 279697437, upload-time = "2025-03-07T05:39:38.418Z" },
 ]
 
 [[package]]
@@ -953,7 +988,7 @@ name = "pytest"
 version = "8.4.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu')" },
+    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu') or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu') or (extra == 'extra-27-indicconformer-realtime-asr-gpu' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu') or (extra == 'extra-27-indicconformer-realtime-asr-gpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu') or (extra == 'extra-27-indicconformer-realtime-asr-official-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu')" },
     { name = "iniconfig" },
     { name = "packaging" },
     { name = "pluggy" },
@@ -1213,20 +1248,60 @@ wheels = [
 [[package]]
 name = "torch"
 version = "2.5.1"
+source = { registry = "https://download.pytorch.org/whl/cpu" }
+resolution-markers = [
+    "(platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux') or sys_platform == 'darwin'",
+]
+dependencies = [
+    { name = "filelock", marker = "(platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux') or sys_platform == 'darwin'" },
+    { name = "fsspec", marker = "(platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux') or sys_platform == 'darwin'" },
+    { name = "jinja2", marker = "(platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux') or sys_platform == 'darwin'" },
+    { name = "networkx", marker = "(platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux') or sys_platform == 'darwin'" },
+    { name = "sympy", marker = "(platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux') or sys_platform == 'darwin'" },
+    { name = "typing-extensions", marker = "(platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux') or sys_platform == 'darwin'" },
+]
+wheels = [
+    { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.5.1-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:d5b3203f191bc40783c99488d2e776dcf93ac431a59491d627a1ca5b3ae20b22", upload-time = "2024-10-29T23:02:06Z" },
+    { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.5.1-cp311-none-macosx_11_0_arm64.whl", hash = "sha256:31f8c39660962f9ae4eeec995e3049b5492eb7360dd4f07377658ef4d728fa4c", upload-time = "2024-10-29T23:02:11Z" },
+]
+
+[[package]]
+name = "torch"
+version = "2.5.1"
 source = { registry = "https://download.pytorch.org/whl/cu124" }
 resolution-markers = [
     "platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux'",
 ]
 dependencies = [
-    { name = "filelock", marker = "(platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux') or (platform_machine != 'aarch64' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (platform_python_implementation != 'CPython' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (sys_platform != 'linux' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu')" },
-    { name = "fsspec", marker = "(platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux') or (platform_machine != 'aarch64' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (platform_python_implementation != 'CPython' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (sys_platform != 'linux' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu')" },
-    { name = "jinja2", marker = "(platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux') or (platform_machine != 'aarch64' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (platform_python_implementation != 'CPython' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (sys_platform != 'linux' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu')" },
-    { name = "networkx", marker = "(platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux') or (platform_machine != 'aarch64' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (platform_python_implementation != 'CPython' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (sys_platform != 'linux' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu')" },
-    { name = "sympy", marker = "(platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux') or (platform_machine != 'aarch64' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (platform_python_implementation != 'CPython' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (sys_platform != 'linux' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu')" },
-    { name = "typing-extensions", marker = "(platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux') or (platform_machine != 'aarch64' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (platform_python_implementation != 'CPython' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (sys_platform != 'linux' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu')" },
+    { name = "filelock", marker = "platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux'" },
+    { name = "fsspec", marker = "platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux'" },
+    { name = "jinja2", marker = "platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux'" },
+    { name = "networkx", marker = "platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux'" },
+    { name = "sympy", marker = "platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux'" },
+    { name = "typing-extensions", marker = "platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux'" },
 ]
 wheels = [
     { url = "https://download-r2.pytorch.org/whl/cu124/torch-2.5.1-cp311-cp311-linux_aarch64.whl", hash = "sha256:e080353c245b752cd84122e4656261eee6d4323a37cfb7d13e0fffd847bae1a3", upload-time = "2024-10-29T23:41:55Z" },
+]
+
+[[package]]
+name = "torch"
+version = "2.5.1+cpu"
+source = { registry = "https://download.pytorch.org/whl/cpu" }
+resolution-markers = [
+    "(platform_machine != 'aarch64' and sys_platform == 'linux') or (platform_python_implementation != 'CPython' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')",
+]
+dependencies = [
+    { name = "filelock", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (platform_python_implementation != 'CPython' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
+    { name = "fsspec", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (platform_python_implementation != 'CPython' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
+    { name = "jinja2", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (platform_python_implementation != 'CPython' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
+    { name = "networkx", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (platform_python_implementation != 'CPython' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
+    { name = "sympy", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (platform_python_implementation != 'CPython' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
+    { name = "typing-extensions", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (platform_python_implementation != 'CPython' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
+]
+wheels = [
+    { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.5.1%2Bcpu-cp311-cp311-linux_x86_64.whl", hash = "sha256:07d7c9e069123d5af08b0cf0013d74f680b2d8be7d9e2cf561a52c90c55d9409", upload-time = "2024-10-29T23:00:55Z" },
+    { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.5.1%2Bcpu-cp311-cp311-win_amd64.whl", hash = "sha256:81531d4d5ca74163dc9574b87396531e546a60cceb6253303c7db6a21e867fdf", upload-time = "2024-10-29T23:01:02Z" },
 ]
 
 [[package]]
@@ -1237,29 +1312,44 @@ resolution-markers = [
     "platform_machine != 'aarch64' or platform_python_implementation != 'CPython' or sys_platform != 'linux'",
 ]
 dependencies = [
-    { name = "filelock", marker = "platform_machine != 'aarch64' or platform_python_implementation != 'CPython' or sys_platform != 'linux' or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu')" },
-    { name = "fsspec", marker = "platform_machine != 'aarch64' or platform_python_implementation != 'CPython' or sys_platform != 'linux' or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu')" },
-    { name = "jinja2", marker = "platform_machine != 'aarch64' or platform_python_implementation != 'CPython' or sys_platform != 'linux' or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu')" },
-    { name = "networkx", marker = "platform_machine != 'aarch64' or platform_python_implementation != 'CPython' or sys_platform != 'linux' or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu')" },
-    { name = "nvidia-cublas-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (sys_platform != 'linux' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu')" },
-    { name = "nvidia-cuda-cupti-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (sys_platform != 'linux' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu')" },
-    { name = "nvidia-cuda-nvrtc-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (sys_platform != 'linux' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu')" },
-    { name = "nvidia-cuda-runtime-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (sys_platform != 'linux' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu')" },
-    { name = "nvidia-cudnn-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (sys_platform != 'linux' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu')" },
-    { name = "nvidia-cufft-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (sys_platform != 'linux' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu')" },
-    { name = "nvidia-curand-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (sys_platform != 'linux' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu')" },
-    { name = "nvidia-cusolver-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (sys_platform != 'linux' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu')" },
-    { name = "nvidia-cusparse-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (sys_platform != 'linux' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu')" },
-    { name = "nvidia-nccl-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (sys_platform != 'linux' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu')" },
-    { name = "nvidia-nvjitlink-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (sys_platform != 'linux' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu')" },
-    { name = "nvidia-nvtx-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (sys_platform != 'linux' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu')" },
-    { name = "sympy", marker = "platform_machine != 'aarch64' or platform_python_implementation != 'CPython' or sys_platform != 'linux' or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu')" },
-    { name = "triton", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (sys_platform != 'linux' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu')" },
-    { name = "typing-extensions", marker = "platform_machine != 'aarch64' or platform_python_implementation != 'CPython' or sys_platform != 'linux' or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu')" },
+    { name = "filelock", marker = "platform_machine != 'aarch64' or platform_python_implementation != 'CPython' or sys_platform != 'linux'" },
+    { name = "fsspec", marker = "platform_machine != 'aarch64' or platform_python_implementation != 'CPython' or sys_platform != 'linux'" },
+    { name = "jinja2", marker = "platform_machine != 'aarch64' or platform_python_implementation != 'CPython' or sys_platform != 'linux'" },
+    { name = "networkx", marker = "platform_machine != 'aarch64' or platform_python_implementation != 'CPython' or sys_platform != 'linux'" },
+    { name = "nvidia-cublas-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cuda-cupti-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cuda-nvrtc-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cuda-runtime-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cudnn-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cufft-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-curand-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cusolver-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cusparse-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-nccl-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-nvjitlink-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-nvtx-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "sympy", marker = "platform_machine != 'aarch64' or platform_python_implementation != 'CPython' or sys_platform != 'linux'" },
+    { name = "triton", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "typing-extensions", marker = "platform_machine != 'aarch64' or platform_python_implementation != 'CPython' or sys_platform != 'linux'" },
 ]
 wheels = [
     { url = "https://download-r2.pytorch.org/whl/cu124/torch-2.5.1%2Bcu124-cp311-cp311-linux_x86_64.whl", hash = "sha256:6b2966ede9affe2fd69e0765691ca723ec870e0c34c7761f4d5b8e318383fdaf", upload-time = "2024-10-29T23:32:09Z" },
     { url = "https://download-r2.pytorch.org/whl/cu124/torch-2.5.1%2Bcu124-cp311-cp311-win_amd64.whl", hash = "sha256:6c8a7003ef1327479ede284b6e5ab3527d3900c2b2d401af15bcc50f2245a59f", upload-time = "2024-10-29T23:32:50Z" },
+]
+
+[[package]]
+name = "torchaudio"
+version = "2.5.1"
+source = { registry = "https://download.pytorch.org/whl/cpu" }
+resolution-markers = [
+    "(platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux') or sys_platform == 'darwin'",
+]
+dependencies = [
+    { name = "torch", version = "2.5.1", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux') or sys_platform == 'darwin'" },
+]
+wheels = [
+    { url = "https://download-r2.pytorch.org/whl/cpu/torchaudio-2.5.1-cp311-cp311-linux_aarch64.whl", hash = "sha256:4ba24769a72bd686903feaf1040c895d710af2ffbcd25ee7a9794ee285561b26", upload-time = "2024-10-29T23:02:35Z" },
+    { url = "https://download-r2.pytorch.org/whl/cpu/torchaudio-2.5.1-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:7005354aa7dda9ef908e13c2566ee1fe0bd6d7f5bae0583b5e53016cd229fc34", upload-time = "2024-10-29T23:02:36Z" },
 ]
 
 [[package]]
@@ -1270,10 +1360,25 @@ resolution-markers = [
     "platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux'",
 ]
 dependencies = [
-    { name = "torch", version = "2.5.1", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "(platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux') or (platform_machine != 'aarch64' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (platform_python_implementation != 'CPython' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (sys_platform != 'linux' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu')" },
+    { name = "torch", version = "2.5.1", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux'" },
 ]
 wheels = [
     { url = "https://download-r2.pytorch.org/whl/cu124/torchaudio-2.5.1-cp311-cp311-linux_aarch64.whl", hash = "sha256:f51d4eda003927f07d4a34b09199a79fde5e5b3df5432880685b70dd63b7c91e", upload-time = "2024-10-29T23:47:11Z" },
+]
+
+[[package]]
+name = "torchaudio"
+version = "2.5.1+cpu"
+source = { registry = "https://download.pytorch.org/whl/cpu" }
+resolution-markers = [
+    "(platform_machine != 'aarch64' and sys_platform == 'linux') or (platform_python_implementation != 'CPython' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')",
+]
+dependencies = [
+    { name = "torch", version = "2.5.1+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (platform_python_implementation != 'CPython' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
+]
+wheels = [
+    { url = "https://download-r2.pytorch.org/whl/cpu/torchaudio-2.5.1%2Bcpu-cp311-cp311-linux_x86_64.whl", hash = "sha256:209f8e7efff818d2066f49c27c8097f2246f8bf6fd743c69bcf8dce80c63ee80", upload-time = "2024-10-29T23:02:33Z" },
+    { url = "https://download-r2.pytorch.org/whl/cpu/torchaudio-2.5.1%2Bcpu-cp311-cp311-win_amd64.whl", hash = "sha256:e08047b9f1997bd303ea6528e5b8009719665a55516a49b6acc359dac20c474d", upload-time = "2024-10-29T23:02:33Z" },
 ]
 
 [[package]]
@@ -1284,7 +1389,7 @@ resolution-markers = [
     "platform_machine != 'aarch64' or platform_python_implementation != 'CPython' or sys_platform != 'linux'",
 ]
 dependencies = [
-    { name = "torch", version = "2.5.1+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "platform_machine != 'aarch64' or platform_python_implementation != 'CPython' or sys_platform != 'linux' or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu')" },
+    { name = "torch", version = "2.5.1+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "platform_machine != 'aarch64' or platform_python_implementation != 'CPython' or sys_platform != 'linux'" },
 ]
 wheels = [
     { url = "https://download-r2.pytorch.org/whl/cu124/torchaudio-2.5.1%2Bcu124-cp311-cp311-linux_x86_64.whl", hash = "sha256:e98938dcc44ebaab8bd8379545784cfddfc23ae17787389448b7ff9918dc3df9", upload-time = "2024-10-29T23:47:09Z" },
@@ -1296,7 +1401,7 @@ name = "tqdm"
 version = "4.70.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu')" },
+    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu') or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu') or (extra == 'extra-27-indicconformer-realtime-asr-gpu' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu') or (extra == 'extra-27-indicconformer-realtime-asr-gpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu') or (extra == 'extra-27-indicconformer-realtime-asr-official-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/21/3b/6c24bec5be5e743ffd99576daa5cc077722fc7d5bbc00bd133fa0c698dc6/tqdm-4.70.0.tar.gz", hash = "sha256:55b0b0dbd97462d06ebee91e4dac24ed4d4702be82b24f07e6c1d27e08cea220", size = 795438, upload-time = "2026-07-27T11:33:15.271Z" }
 wheels = [
@@ -1329,7 +1434,7 @@ name = "triton"
 version = "3.1.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "filelock", marker = "platform_machine != 'aarch64' or platform_python_implementation != 'CPython' or sys_platform != 'linux' or (extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu')" },
+    { name = "filelock", marker = "platform_machine != 'aarch64' or platform_python_implementation != 'CPython' or sys_platform != 'linux'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/86/17/d9a5cf4fcf46291856d1e90762e36cbabd2a56c7265da0d1d9508c8e3943/triton-3.1.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:0f34f6e7885d1bf0eaaf7ba875a5f0ce6f3c13ba98f9503651c1e6dc6757ed5c", size = 209506424, upload-time = "2024-10-14T16:05:42.337Z" },
@@ -1401,7 +1506,7 @@ standard = [
     { name = "httptools" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
-    { name = "uvloop", marker = "(platform_python_implementation != 'PyPy' and sys_platform != 'cygwin' and sys_platform != 'win32') or (platform_python_implementation == 'PyPy' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (sys_platform == 'cygwin' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (sys_platform == 'win32' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu')" },
+    { name = "uvloop", marker = "(platform_python_implementation != 'PyPy' and sys_platform != 'cygwin' and sys_platform != 'win32') or (platform_python_implementation == 'PyPy' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (platform_python_implementation == 'PyPy' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu') or (platform_python_implementation == 'PyPy' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu') or (platform_python_implementation == 'PyPy' and extra == 'extra-27-indicconformer-realtime-asr-gpu' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu') or (platform_python_implementation == 'PyPy' and extra == 'extra-27-indicconformer-realtime-asr-gpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu') or (platform_python_implementation == 'PyPy' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu') or (sys_platform == 'cygwin' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (sys_platform == 'cygwin' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu') or (sys_platform == 'cygwin' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu') or (sys_platform == 'cygwin' and extra == 'extra-27-indicconformer-realtime-asr-gpu' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu') or (sys_platform == 'cygwin' and extra == 'extra-27-indicconformer-realtime-asr-gpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu') or (sys_platform == 'cygwin' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu') or (sys_platform == 'win32' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-gpu') or (sys_platform == 'win32' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu') or (sys_platform == 'win32' and extra == 'extra-27-indicconformer-realtime-asr-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu') or (sys_platform == 'win32' and extra == 'extra-27-indicconformer-realtime-asr-gpu' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu') or (sys_platform == 'win32' and extra == 'extra-27-indicconformer-realtime-asr-gpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu') or (sys_platform == 'win32' and extra == 'extra-27-indicconformer-realtime-asr-official-cpu' and extra == 'extra-27-indicconformer-realtime-asr-official-gpu')" },
     { name = "watchfiles" },
     { name = "websockets" },
 ]
@@ -1447,6 +1552,26 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/27/0b/a54103cfd732bb703c7a749222011a0483ef3705948dae3b203158601119/watchfiles-1.2.0-pp311-pypy311_pp73-macosx_11_0_arm64.whl", hash = "sha256:094b9b70103d4e963499bdea001ee3c2697b144cd9ae6218a62c0f89ec9e31db", size = 396629, upload-time = "2026-05-18T04:32:03.268Z" },
     { url = "https://files.pythonhosted.org/packages/5e/2c/73f31a3b893886206c3f54d73e8ad8dee58cdb2f69ad2622e0a8a9e07f4e/watchfiles-1.2.0-pp311-pypy311_pp73-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:b0ef001f8c25ad0fa9529f914c1600647ecd0f542d11c19b7894768c67b6acb7", size = 457318, upload-time = "2026-05-18T04:31:01.932Z" },
     { url = "https://files.pythonhosted.org/packages/e9/f9/45d021e4a5cc7b9dd567f7cbb06d3b75f751a690063fb6cc7ec60f4e46b7/watchfiles-1.2.0-pp311-pypy311_pp73-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:a88fc94e647bc4eec523f1caa540258eb71d14278b9daf72fa1e2658a98df0f0", size = 457771, upload-time = "2026-05-18T04:30:56.331Z" },
+]
+
+[[package]]
+name = "webrtcvad-wheels"
+version = "2.0.14"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/28/ba/3a8ce2cff3eee72a39ed190e5f9dac792da1526909c97a11589590b21739/webrtcvad_wheels-2.0.14.tar.gz", hash = "sha256:5f59c8e291c6ef102d9f39532982fbf26a52ce2de6328382e2654b0960fea397", size = 70607, upload-time = "2024-09-05T10:17:02.471Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f6/a3/d17061911034aa38c10bd9143f21396b4e74448013c9049e94e445805c96/webrtcvad_wheels-2.0.14-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:e17f5b273523ae9de28117078107e4a2cee1b521d99d5fd2a88622277d7fa06f", size = 31004, upload-time = "2024-09-05T10:14:55.783Z" },
+    { url = "https://files.pythonhosted.org/packages/f3/87/bff850cb6f0a875f32a7ff544416738cabe028a483a8e54056e9a70f9cd0/webrtcvad_wheels-2.0.14-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:f1f6e6cb99e58f65d9a357fef0703263cf2eb5fa4d63333fff2aba73e2ad3947", size = 29497, upload-time = "2024-09-05T10:14:56.729Z" },
+    { url = "https://files.pythonhosted.org/packages/2e/ef/fe3e6214c9bbaa852c41fd3a11dc0c3465d621f0639322ffbd26bff835e8/webrtcvad_wheels-2.0.14-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:b4003139f180b8e4930b862d662dc574602e4547c8fb497bc48579b7cacc4110", size = 86295, upload-time = "2024-09-05T10:14:57.997Z" },
+    { url = "https://files.pythonhosted.org/packages/a5/95/4669dec6466c6c4a8720a9d66b7839d3d386be534add7a59d8cf205d8eb8/webrtcvad_wheels-2.0.14-cp311-cp311-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:af2656e2e344abaad2fab8f4441a1ef850643bd7de15c2df54ca6c9fa92961f5", size = 95763, upload-time = "2024-09-05T10:14:59.378Z" },
+    { url = "https://files.pythonhosted.org/packages/53/ba/4693ee3610c363505d355265804d39aa46c4acfbc7f6db6bab4bd6236418/webrtcvad_wheels-2.0.14-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:42cbef958b145573fb425482dbbd74fc080540a510c3871e1cebd59afa83c87f", size = 83082, upload-time = "2024-09-05T10:15:00.543Z" },
+    { url = "https://files.pythonhosted.org/packages/c3/10/c6d8335b1063e962ff6cbefb06b602627eb1b4f30d890611638c6c575665/webrtcvad_wheels-2.0.14-cp311-cp311-manylinux_2_5_i686.manylinux1_i686.manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:bce6be5aef9512dbbaccbf16df2793c9e1a3b538c8cebb05976cf4e44bd3381f", size = 80983, upload-time = "2024-09-05T10:15:01.381Z" },
+    { url = "https://files.pythonhosted.org/packages/60/2a/97c9e5681ac0d47430c5bd280aaa7be63431cff1c620c489771734491cbd/webrtcvad_wheels-2.0.14-cp311-cp311-musllinux_1_2_aarch64.whl", hash = "sha256:32409315eaaec46ea58fb7e729193c66573d95124208efd03f332bc2fc4c6c7b", size = 86496, upload-time = "2024-09-05T10:15:02.242Z" },
+    { url = "https://files.pythonhosted.org/packages/9f/8b/56863c61df31cd33af62f1a795c6afca73acb3fb93eb377908a1da991f72/webrtcvad_wheels-2.0.14-cp311-cp311-musllinux_1_2_i686.whl", hash = "sha256:aa8e901c1cdc4344a62a09745b2b3cdf34617801efc49d433fdbc238193efc9c", size = 82668, upload-time = "2024-09-05T10:15:03.473Z" },
+    { url = "https://files.pythonhosted.org/packages/68/ec/95c48ec2dce1bea0cffdfb03055d2e0f958e2ea2e5754c35bc144c882df4/webrtcvad_wheels-2.0.14-cp311-cp311-musllinux_1_2_ppc64le.whl", hash = "sha256:e739720c6b5bb0a21629f3a43563d8afe1de1b40d0ca07a39bc70f0584e05cc8", size = 93642, upload-time = "2024-09-05T10:15:04.77Z" },
+    { url = "https://files.pythonhosted.org/packages/59/ca/ceb1e26f1dcddbe238ae0f769200073572ce61fe2f848476273253748004/webrtcvad_wheels-2.0.14-cp311-cp311-musllinux_1_2_x86_64.whl", hash = "sha256:04e47b87bf673098f25e2c2e07e486b58a339a93231ee0021a86a92b3b759b89", size = 87014, upload-time = "2024-09-05T10:15:05.87Z" },
+    { url = "https://files.pythonhosted.org/packages/62/50/9677355cbb2a9a32c1be3e3fee8c393d5f7f370943914ed9a27c58538a1f/webrtcvad_wheels-2.0.14-cp311-cp311-win32.whl", hash = "sha256:4838e120cbd2e76bd47abc338c3121e8dea7653ae19650ce4f9c40b9bf84bc19", size = 17369, upload-time = "2024-09-05T10:15:06.707Z" },
+    { url = "https://files.pythonhosted.org/packages/80/bd/4309d83120812d04af99aa21a976a4bb8cc10e39f709232c0180bd4e0146/webrtcvad_wheels-2.0.14-cp311-cp311-win_amd64.whl", hash = "sha256:0d9ad6ef4ef7c89228469df52a4657886055a9f1ab036ede09400e2279ac5c70", size = 19901, upload-time = "2024-09-05T10:15:07.562Z" },
 ]
 
 [[package]]

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from typing import Literal
 
 import numpy as np
 import soxr  # type: ignore[import-untyped]
@@ -18,6 +19,9 @@ from app.openai_compat.realtime.schemas import (
     SessionUpdate,
     TranscriptionSession,
 )
+
+_OPENAI_SAMPLE_RATE: Literal[24_000] = 24_000
+_VAD_FRAME_BYTES = _OPENAI_SAMPLE_RATE * 2 * 20 // 1_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,7 +39,7 @@ class TurnSnapshot:
     def to_engine_audio(self) -> np.ndarray:
         samples = np.frombuffer(self.pcm16, dtype="<i2").astype(np.float32)
         samples /= np.float32(32_768.0)
-        resampled = soxr.resample(samples, 24_000, 16_000, quality="HQ")
+        resampled = soxr.resample(samples, _OPENAI_SAMPLE_RATE, 16_000, quality="HQ")
         return np.ascontiguousarray(resampled, dtype=np.float32)
 
 
@@ -65,11 +69,11 @@ class RealtimeSessionState:
 
     @property
     def audio_duration_ms(self) -> int:
-        return len(self.audio) * 1_000 // (24_000 * 2)
+        return len(self.audio) * 1_000 // (_OPENAI_SAMPLE_RATE * 2)
 
     @property
     def total_audio_seconds(self) -> float:
-        return self.total_audio_bytes / (24_000 * 2)
+        return self.total_audio_bytes / (_OPENAI_SAMPLE_RATE * 2)
 
     def apply_update(self, update: SessionUpdate, canonical_model: str) -> None:
         if self.audio:
@@ -84,7 +88,7 @@ class RealtimeSessionState:
         prospective_bytes = self.total_audio_bytes + len(payload)
         if prospective_bytes > self.max_audio_bytes:
             raise OverflowError("session audio exceeds the configured byte limit")
-        if prospective_bytes / (24_000 * 2) > self.max_audio_seconds:
+        if prospective_bytes / (_OPENAI_SAMPLE_RATE * 2) > self.max_audio_seconds:
             raise OverflowError("session audio exceeds the configured duration limit")
         self.audio.extend(payload)
         self.total_audio_bytes = prospective_bytes
@@ -100,6 +104,18 @@ class RealtimeSessionState:
         self.silence_run_frames = 0
         self.speech_active = False
 
+    def next_vad_frame(self) -> tuple[bytes, int] | None:
+        """Copy the next complete 20 ms frame and return its absolute end time."""
+
+        end = self.vad_scan_bytes + _VAD_FRAME_BYTES
+        if end > len(self.audio):
+            return None
+        frame = bytes(self.audio[self.vad_scan_bytes : end])
+        self.vad_scan_bytes = end
+        buffered_before_turn = self.total_audio_bytes - len(self.audio)
+        absolute_end_ms = (buffered_before_turn + end) * 1_000 // (_OPENAI_SAMPLE_RATE * 2)
+        return frame, absolute_end_ms
+
     def snapshot(
         self, *, item_id: str, client_event_id: str | None, byte_count: int | None = None
     ) -> TurnSnapshot:
@@ -112,7 +128,7 @@ class RealtimeSessionState:
             raise ValueError("PCM16 audio must contain complete samples")
         pcm = bytes(self.audio[:size])
         del self.audio[:size]
-        duration_ms = round(size * 1_000 / (24_000 * 2))
+        duration_ms = round(size * 1_000 / (_OPENAI_SAMPLE_RATE * 2))
         snapshot = TurnSnapshot(
             item_id=item_id,
             previous_item_id=self.previous_item_id,
@@ -134,7 +150,7 @@ class RealtimeSessionState:
             expires_at=self.expires_at,
             audio=SessionAudio(
                 input=SessionAudioInput(
-                    format=PCMFormat(type="audio/pcm", rate=24_000),
+                    format=PCMFormat(type="audio/pcm", rate=_OPENAI_SAMPLE_RATE),
                     transcription=SessionTranscription(model=self.model, languages=languages),
                     turn_detection=self.turn_detection,
                 )

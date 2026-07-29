@@ -96,15 +96,17 @@ jobs:
         run: |
           set -uo pipefail
           rc=0
-          # Contract from deploy/: CUDA_IMAGE is the only build arg and must be
-          # digest-pinned so the base layer is reproducible.
-          if grep -qE '^[[:space:]]*ARG[[:space:]]+CUDA_IMAGE=' "${DOCKERFILE}"; then
-            default="$(grep -E '^[[:space:]]*ARG[[:space:]]+CUDA_IMAGE=' "${DOCKERFILE}" | head -1 | cut -d= -f2- | tr -d "\"' ")"
-            if [ -n "${default}" ] && ! printf '%s' "${default}" | grep -q '@sha256:[0-9a-f]\{64\}'; then
-              echo "::error title=Unpinned CUDA base::ARG CUDA_IMAGE default '${default}' is not digest-pinned"
-              rc=1
+          # Both supported runtime bases are immutable. RUNTIME_IMAGE selects one
+          # of these defaults (or another explicitly digest-pinned base).
+          for argument in CUDA_IMAGE CPU_IMAGE; do
+            if grep -qE "^[[:space:]]*ARG[[:space:]]+${argument}=" "${DOCKERFILE}"; then
+              default="$(grep -E "^[[:space:]]*ARG[[:space:]]+${argument}=" "${DOCKERFILE}" | head -1 | cut -d= -f2- | tr -d "\"' ")"
+              if [ -n "${default}" ] && ! printf '%s' "${default}" | grep -q '@sha256:[0-9a-f]\{64\}'; then
+                echo "::error title=Unpinned runtime base::ARG ${argument} default '${default}' is not digest-pinned"
+                rc=1
+              fi
             fi
-          fi
+          done
           if grep -E 'COPY[[:space:]]+--from=[^[:space:]]+/' "${DOCKERFILE}" \
             | grep -vE -- '--from=[^[:space:]]+@sha256:[0-9a-f]{64}([[:space:]]|$)'; then
             echo "::error title=Unpinned COPY source::Every external COPY --from image must be digest-pinned"

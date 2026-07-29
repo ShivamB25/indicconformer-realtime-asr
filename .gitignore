@@ -14,6 +14,7 @@ wheels/
 .env.*
 !.env.example
 secrets/
+.secrets/
 *.token
 .hf_token
 huggingface_token

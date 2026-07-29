@@ -13,6 +13,8 @@ from app.core.readiness import CheckStatus, ReadinessTracker
 from app.core.types import EngineKind
 from app.engine.base import Engine, TranscriptionRequest, TranscriptionResult
 from app.observability.metrics import Metrics
+from app.vad.base import VADProvider
+from app.vad.factory import build_vad_provider
 
 
 class Scheduler(Protocol):
@@ -82,6 +84,7 @@ def build_lifespan(
     *,
     engine: Engine | None = None,
     scheduler: Scheduler | None = None,
+    vad_provider: VADProvider | None = None,
 ) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
     """Build a lifespan with optional dependency injection for CPU-safe tests."""
 
@@ -90,13 +93,24 @@ def build_lifespan(
         tracker: ReadinessTracker = app.state.readiness
         active_engine = engine
         active_scheduler = scheduler
+        active_vad_provider = vad_provider
         app.state.engine = None
         app.state.scheduler = None
+        app.state.vad_provider = None
         app.state.api_key = None
 
         try:
             if settings.api_key_file is not None:
                 app.state.api_key = read_api_key(settings.api_key_file)
+
+            tracker.update(stage="vad_constructing")
+            if active_vad_provider is None:
+                active_vad_provider = build_vad_provider(settings, app.state.metrics)
+            tracker.update(stage="vad_starting")
+            await active_vad_provider.startup()
+            app.state.vad_provider = active_vad_provider
+            app.state.metrics.set_vad_provider(active_vad_provider.name)
+
             tracker.update(stage="engine_constructing", engine=CheckStatus.STARTING)
             if active_engine is None:
                 active_engine = _build_engine(settings)
@@ -130,10 +144,16 @@ def build_lifespan(
             raise
         finally:
             tracker.update(stage="stopping")
-            if active_scheduler is not None:
-                await active_scheduler.close()
-            if active_engine is not None:
-                await active_engine.shutdown()
+            try:
+                if active_scheduler is not None:
+                    await active_scheduler.close()
+            finally:
+                try:
+                    if active_engine is not None:
+                        await active_engine.shutdown()
+                finally:
+                    if active_vad_provider is not None:
+                        await active_vad_provider.close()
             tracker.update(
                 stage="stopped",
                 engine=CheckStatus.STOPPED,

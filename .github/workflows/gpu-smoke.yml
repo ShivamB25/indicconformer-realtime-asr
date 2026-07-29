@@ -9,7 +9,8 @@ name: GPU smoke
 #   GPU_SMOKE_IMAGE_DIGEST       exact sha256:<64 lowercase hex> digest
 #   GPU_SMOKE_MODEL_REVISION     exact 40-hex Hugging Face commit revision
 # Protected environment variables required on the GPU runner:
-#   GPU_MODEL_DIR                absolute path to pre-provisioned model files
+#   GPU_MODEL_DIR                absolute path to pre-provisioned ASR model files
+#   GPU_VAD_MODEL_DIR            absolute path to pre-provisioned Silero v6.2.1 files
 #   GPU_GOLDEN_MANIFEST          absolute path to the protected golden manifest
 #   GPU_GOLDEN_HOOK              absolute path to the protected executable hook
 #   GPU_BENCHMARK_MANIFEST       absolute path to the benchmark JSON manifest
@@ -64,6 +65,7 @@ env:
   SELECTED_IMAGE_DIGEST: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.image_digest || vars.GPU_SMOKE_IMAGE_DIGEST }}
   SELECTED_MODEL_REVISION: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.model_revision || vars.GPU_SMOKE_MODEL_REVISION }}
   SHOULD_BENCHMARK: ${{ github.event_name == 'schedule' || inputs.run_benchmark }}
+  SILERO_VAD_SHA256: 1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3
 
 jobs:
   validate-inputs:
@@ -143,6 +145,7 @@ jobs:
       EXPECTED_ACCELERATOR: ${{ matrix.accelerator }}
       # These are protected environment variables, not repository defaults.
       MODEL_DIR: ${{ vars.GPU_MODEL_DIR }}
+      VAD_MODEL_DIR: ${{ vars.GPU_VAD_MODEL_DIR }}
       GOLDEN_MANIFEST: ${{ vars.GPU_GOLDEN_MANIFEST }}
       GOLDEN_HOOK: ${{ vars.GPU_GOLDEN_HOOK }}
       BENCHMARK_MANIFEST: ${{ vars.GPU_BENCHMARK_MANIFEST }}
@@ -160,7 +163,7 @@ jobs:
       - name: Validate protected runner assets
         run: |
           set -euo pipefail
-          for variable in MODEL_DIR GOLDEN_MANIFEST GOLDEN_HOOK BENCHMARK_MANIFEST; do
+          for variable in MODEL_DIR VAD_MODEL_DIR GOLDEN_MANIFEST GOLDEN_HOOK BENCHMARK_MANIFEST; do
             value="${!variable:-}"
             if [ -z "${value}" ] || [[ "${value}" != /* ]]; then
               echo "::error title=Missing protected asset::${variable} must be an absolute path set in the gpu-smoke environment"
@@ -169,6 +172,10 @@ jobs:
           done
           test -d "${MODEL_DIR}" || { echo "::error::MODEL_DIR does not exist"; exit 1; }
           test -f "${MODEL_DIR}/model-manifest.json" || { echo "::error::model-manifest.json does not exist"; exit 1; }
+          test -d "${VAD_MODEL_DIR}" || { echo "::error::VAD_MODEL_DIR does not exist"; exit 1; }
+          test ! -L "${VAD_MODEL_DIR}" || { echo "::error::VAD_MODEL_DIR must not be a symlink"; exit 1; }
+          test -f "${VAD_MODEL_DIR}/silero_vad.onnx" || { echo "::error::silero_vad.onnx does not exist"; exit 1; }
+          test -f "${VAD_MODEL_DIR}/LICENSE" || { echo "::error::Silero LICENSE does not exist"; exit 1; }
           test -f "${GOLDEN_MANIFEST}" || { echo "::error::GOLDEN_MANIFEST does not exist"; exit 1; }
           test -x "${GOLDEN_HOOK}" || { echo "::error::GOLDEN_HOOK is not executable"; exit 1; }
           test -f "${BENCHMARK_MANIFEST}" || { echo "::error::BENCHMARK_MANIFEST does not exist"; exit 1; }
@@ -228,6 +235,19 @@ jobs:
             exit 1
           fi
 
+      - name: Verify pinned Silero VAD artifacts offline
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --network none \
+            --read-only \
+            --entrypoint /app/.venv/bin/python \
+            --mount "type=bind,src=${VAD_MODEL_DIR},dst=/models/vad/silero-v6.2.1,readonly" \
+            "${IMAGE_REF}" \
+            /app/scripts/download_vad_model.py \
+            --output-dir /models/vad/silero-v6.2.1 \
+            --offline
+
       - name: Fail closed unless CUDAExecutionProvider is available
         run: |
           set -euo pipefail
@@ -260,6 +280,7 @@ jobs:
             --tmpfs /tmp:rw,noexec,nosuid,size=1g \
             -p 127.0.0.1::8000 \
             --mount "type=bind,src=${MODEL_DIR},dst=/models/indicconformer,readonly" \
+            --mount "type=bind,src=${VAD_MODEL_DIR},dst=/models/vad/silero-v6.2.1,readonly" \
             --mount "type=bind,src=${ASR_API_KEY_TOKEN_FILE},dst=/run/api_key,readonly" \
             -e ASR_ENGINE=ort \
             -e ASR_ENVIRONMENT=production \
@@ -269,6 +290,9 @@ jobs:
             -e ASR_MODEL_REVISION="${MODEL_REVISION}" \
             -e ASR_OFFLINE=true \
             -e ASR_REQUIRE_CUDA=true \
+            -e ASR_VAD_PROVIDER=silero \
+            -e ASR_VAD_MODEL_PATH=/models/vad/silero-v6.2.1/silero_vad.onnx \
+            -e ASR_VAD_MODEL_SHA256="${SILERO_VAD_SHA256}" \
             -e ASR_API_KEY_FILE=/run/api_key \
             -e HF_HUB_OFFLINE=1 \
             -e TRANSFORMERS_OFFLINE=1 \

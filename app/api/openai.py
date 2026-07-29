@@ -26,7 +26,13 @@ from app.openai_compat.audio import (
     decode_audio_file,
 )
 from app.openai_compat.constants import MODEL_CREATED, MODEL_OWNER
-from app.openai_compat.schemas import ModelList, ModelObject, TranscriptionJSONResponse
+from app.openai_compat.schemas import (
+    ModelList,
+    ModelObject,
+    OpenAIErrorEnvelope,
+    TranscriptionJSONResponse,
+)
+from app.openapi import OPENAI_TRANSCRIPTION_REQUEST_BODY
 from app.transcription import record_success, run_transcription
 
 router = APIRouter(prefix="/v1", tags=["openai"])
@@ -161,7 +167,13 @@ def _model_object() -> ModelObject:
     )
 
 
-@router.get("/models", response_model=ModelList)
+@router.get(
+    "/models",
+    response_model=ModelList,
+    summary="List available transcription models",
+    description="Returns the single pinned IndicConformer model exposed by this service.",
+    responses={status.HTTP_401_UNAUTHORIZED: {"model": OpenAIErrorEnvelope}},
+)
 async def list_models(request: Request) -> JSONResponse:
     request_id = _begin_request(request)
     require_http_api_key(request)
@@ -172,7 +184,16 @@ async def list_models(request: Request) -> JSONResponse:
     )
 
 
-@router.get("/models/{model:path}", response_model=ModelObject)
+@router.get(
+    "/models/{model:path}",
+    response_model=ModelObject,
+    summary="Retrieve a transcription model",
+    description="Accepts the canonical model ID or the `indicconformer-600m` alias.",
+    responses={
+        status.HTTP_400_BAD_REQUEST: {"model": OpenAIErrorEnvelope},
+        status.HTTP_401_UNAUTHORIZED: {"model": OpenAIErrorEnvelope},
+    },
+)
 async def retrieve_model(request: Request, model: str) -> JSONResponse:
     request_id = _begin_request(request)
     require_http_api_key(request)
@@ -186,10 +207,26 @@ async def retrieve_model(request: Request, model: str) -> JSONResponse:
 @router.post(
     "/audio/transcriptions",
     response_model=TranscriptionJSONResponse,
+    summary="Create an OpenAI-compatible transcription",
+    description=(
+        "Upload common audio formats. Audio is decoded and resampled to mono 16 kHz, "
+        "then transcribed with the RNNT final decoder. `language` is required."
+    ),
+    openapi_extra=OPENAI_TRANSCRIPTION_REQUEST_BODY,
     responses={
-        status.HTTP_400_BAD_REQUEST: {"description": "Invalid OpenAI request"},
-        status.HTTP_413_CONTENT_TOO_LARGE: {"description": "Upload limit exceeded"},
-        status.HTTP_503_SERVICE_UNAVAILABLE: {"description": "Transcription unavailable"},
+        status.HTTP_200_OK: {
+            "description": "JSON `{text}` response or plain text when requested",
+            "content": {
+                "text/plain": {
+                    "schema": {"type": "string"},
+                    "example": "नमस्ते दुनिया",
+                }
+            },
+        },
+        status.HTTP_400_BAD_REQUEST: {"model": OpenAIErrorEnvelope},
+        status.HTTP_401_UNAUTHORIZED: {"model": OpenAIErrorEnvelope},
+        status.HTTP_413_CONTENT_TOO_LARGE: {"model": OpenAIErrorEnvelope},
+        status.HTTP_503_SERVICE_UNAVAILABLE: {"model": OpenAIErrorEnvelope},
     },
 )
 async def create_transcription(request: Request) -> Response:

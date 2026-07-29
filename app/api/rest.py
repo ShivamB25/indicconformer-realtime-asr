@@ -70,18 +70,48 @@ def _record_success(
 @router.post(
     "/transcribe",
     response_model=TranscriptionResponse,
+    summary="Transcribe mono 16 kHz PCM audio",
+    description=(
+        "Upload a mono 16 kHz signed PCM WAV file or headerless PCM16LE bytes. "
+        "Latency mode uses a CTC final; hybrid and accuracy modes use RNNT."
+    ),
     responses={
-        status.HTTP_400_BAD_REQUEST: {"model": ErrorResponse},
-        status.HTTP_413_CONTENT_TOO_LARGE: {"model": ErrorResponse},
-        status.HTTP_422_UNPROCESSABLE_CONTENT: {"model": ErrorResponse},
-        status.HTTP_503_SERVICE_UNAVAILABLE: {"model": ErrorResponse},
+        status.HTTP_400_BAD_REQUEST: {
+            "model": ErrorResponse,
+            "description": "Invalid audio or unsupported form option",
+        },
+        status.HTTP_401_UNAUTHORIZED: {
+            "model": ErrorResponse,
+            "description": "Missing or invalid bearer token",
+        },
+        status.HTTP_413_CONTENT_TOO_LARGE: {
+            "model": ErrorResponse,
+            "description": "Configured upload or duration limit exceeded",
+        },
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "model": ErrorResponse,
+            "description": "Missing or invalid multipart field",
+        },
+        status.HTTP_503_SERVICE_UNAVAILABLE: {
+            "model": ErrorResponse,
+            "description": "Service is not ready, timed out, or inference failed",
+        },
     },
 )
 async def transcribe(
     request: Request,
-    audio: Annotated[UploadFile, File(description="mono 16 kHz PCM WAV or pcm_s16le")],
-    language: Annotated[LanguageCode, Form()],
-    mode: Annotated[ProcessingMode, Form()] = ProcessingMode.HYBRID,
+    audio: Annotated[
+        UploadFile,
+        File(description="Mono 16 kHz signed PCM16 WAV or headerless PCM16LE audio"),
+    ],
+    language: Annotated[
+        LanguageCode,
+        Form(description="Required language code; for example `hi`, `ta`, `bn`, or `kn`"),
+    ],
+    mode: Annotated[
+        ProcessingMode,
+        Form(description=("`latency` selects a CTC final; `hybrid` and `accuracy` select RNNT")),
+    ] = ProcessingMode.HYBRID,
 ) -> TranscriptionResponse:
     require_http_api_key(request)
     settings: Settings = request.app.state.settings

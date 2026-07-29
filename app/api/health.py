@@ -9,7 +9,15 @@ from app.schemas.rest import LiveResponse, ReadyResponse
 router = APIRouter(prefix="/health", tags=["health"])
 
 
-@router.get("/live", response_model=LiveResponse)
+@router.get(
+    "/live",
+    response_model=LiveResponse,
+    summary="Check process liveness",
+    description=(
+        "Returns `200` when the HTTP process and event loop are alive. "
+        "It never loads a model or invokes inference."
+    ),
+)
 async def live() -> LiveResponse:
     """Process liveness only; this endpoint never invokes inference."""
 
@@ -19,7 +27,17 @@ async def live() -> LiveResponse:
 @router.get(
     "/ready",
     response_model=ReadyResponse,
-    responses={status.HTTP_503_SERVICE_UNAVAILABLE: {"model": ReadyResponse}},
+    summary="Check model and scheduler readiness",
+    description=(
+        "Returns `200` only when startup checks are ready or disabled; otherwise "
+        "returns `503` with the current stage and component checks."
+    ),
+    responses={
+        status.HTTP_503_SERVICE_UNAVAILABLE: {
+            "model": ReadyResponse,
+            "description": "One or more startup components are not ready",
+        }
+    },
 )
 async def ready(request: Request) -> ReadyResponse | JSONResponse:
     """Report staged engine and scheduler readiness without doing work."""

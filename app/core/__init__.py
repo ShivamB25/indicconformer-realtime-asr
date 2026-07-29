@@ -8,6 +8,7 @@ from app.core.types import (
     EngineKind,
     LanguageCode,
     ProcessingMode,
+    VADKind,
 )
 
 __all__ = [
@@ -15,6 +16,7 @@ __all__ = [
     "EngineKind",
     "LanguageCode",
     "ProcessingMode",
+    "VADKind",
     "SUPPORTED_LANGUAGE_CODES",
     "SUPPORTED_LANGUAGES",
     "Settings",

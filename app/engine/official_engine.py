@@ -68,7 +68,7 @@ class OfficialIndicConformerEngine(BaseEngine):
         # Heavy optional dependencies are deliberately startup-only.
         try:
             import torch  # type: ignore[import-not-found]
-            from transformers import AutoModel  # type: ignore[import-not-found]
+            from transformers import AutoConfig, AutoModel  # type: ignore[import-not-found]
         except ImportError as exc:
             raise RuntimeError(
                 "the official engine requires the production torch/transformers extras"
@@ -78,11 +78,13 @@ class OfficialIndicConformerEngine(BaseEngine):
             raise RuntimeError("CUDA is required but is not available")
         self._device = "cuda" if torch.cuda.is_available() else "cpu"
 
-        model = AutoModel.from_pretrained(
+        config = AutoConfig.from_pretrained(
             str(self._model_dir),
             local_files_only=True,
             trust_remote_code=True,
         )
+        config.ts_folder = str(self._model_dir)
+        model = AutoModel.from_config(config, trust_remote_code=True)
         model.to(self._device)
         model.eval()
         self._torch = torch

@@ -8,3 +8,9 @@
 !app/**
 !scripts/
 !scripts/**
+
+# Never allow a locally downloaded model to re-enter the context through an
+# otherwise allow-listed application or script directory.
+**/*.onnx
+**/*.onnx.data
+**/*.safetensors

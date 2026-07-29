@@ -7,7 +7,7 @@ from typing import Literal, Self
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from app.core.types import EngineKind
+from app.core.types import EngineKind, VADKind
 
 
 class Settings(BaseSettings):
@@ -39,6 +39,15 @@ class Settings(BaseSettings):
     request_timeout_seconds: float = Field(default=120.0, gt=0, le=3600)
     websocket_allowed_origins: tuple[str, ...] = ()
     api_key_file: Path | None = None
+    vad_provider: VADKind = VADKind.ENERGY
+    vad_model_path: Path | None = None
+    vad_model_sha256: str | None = None
+    vad_speech_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    vad_max_streams: int = Field(default=128, ge=1, le=100_000)
+    vad_cpu_workers: int = Field(default=2, ge=1, le=128)
+    vad_pending_capacity: int = Field(default=128, ge=1, le=100_000)
+    vad_classification_deadline_seconds: float = Field(default=0.1, gt=0.0, le=10.0)
+    vad_webrtc_mode: int = Field(default=1, ge=0, le=3)
 
     @model_validator(mode="after")
     def validate_engine_artifacts(self) -> Self:
@@ -74,6 +83,21 @@ class Settings(BaseSettings):
                 )
             if not self.offline:
                 raise ValueError("production engines require offline=true")
+
+        if self.environment == "production" and self.vad_provider is VADKind.ENERGY:
+            raise ValueError("the energy VAD is not permitted in production")
+        if self.vad_provider is VADKind.SILERO:
+            if self.vad_model_path is None:
+                raise ValueError("Silero VAD requires vad_model_path")
+            if self.environment == "production" and not self.vad_model_path.is_absolute():
+                raise ValueError("production requires an absolute vad_model_path")
+            digest = self.vad_model_sha256
+            if (
+                digest is None
+                or len(digest) != 64
+                or any(character not in "0123456789abcdef" for character in digest)
+            ):
+                raise ValueError("Silero VAD requires a lowercase SHA-256 digest")
 
         return self
 

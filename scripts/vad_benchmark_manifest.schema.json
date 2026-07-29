@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/AI4Bharat/indicconformer-realtime-asr/schemas/vad-benchmark-manifest-1.0.json",
+  "title": "Streaming VAD benchmark manifest",
+  "description": "A labeled corpus whose PCM WAV variants share frame-aligned speech references. Audio variants are generated before benchmarking; the benchmark never synthesizes noise.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "corpus",
+    "sample_rate_hz",
+    "frame_duration_ms",
+    "clips"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "corpus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "version": {"type": "string", "minLength": 1}
+      }
+    },
+    "sample_rate_hz": {"enum": [16000, 24000]},
+    "frame_duration_ms": {"const": 20},
+    "clips": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/clip"}
+    }
+  },
+  "$defs": {
+    "clip": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "language", "speech_segments", "variants"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "language": {
+          "enum": [
+            "as", "bn", "brx", "doi", "gu", "hi", "kn", "kok", "ks",
+            "mai", "ml", "mni", "mr", "ne", "or", "pa", "sa", "sat",
+            "sd", "ta", "te", "ur"
+          ]
+        },
+        "speech_segments": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/speech_segment"}
+        },
+        "variants": {
+          "type": "array",
+          "minItems": 1,
+          "contains": {
+            "type": "object",
+            "properties": {
+              "condition": {
+                "type": "object",
+                "properties": {"type": {"const": "clean"}},
+                "required": ["type"]
+              }
+            },
+            "required": ["condition"]
+          },
+          "items": {"$ref": "#/$defs/variant"}
+        }
+      }
+    },
+    "speech_segment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start_frame", "end_frame"],
+      "properties": {
+        "start_frame": {"type": "integer", "minimum": 0},
+        "end_frame": {"type": "integer", "minimum": 1}
+      }
+    },
+    "variant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "path", "sha256", "condition"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "condition": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["type"],
+              "properties": {"type": {"const": "clean"}}
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["type", "noise", "snr_db"],
+              "properties": {
+                "type": {"const": "noise"},
+                "noise": {"type": "string", "minLength": 1},
+                "snr_db": {"type": "number"}
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

@@ -22,7 +22,7 @@ client microphone / WAV
         v
 FastAPI gateway
   +-- protocol validation and admission control
-  +-- energy VAD and endpoint detector
+  +-- process-owned bounded VAD provider and per-session stream state
   +-- bounded per-session audio buffers
   +-- final-first, bounded, dynamic-batching scheduler
         |
@@ -57,7 +57,8 @@ app/openai_compat/                  OpenAI-specific wire contracts and mapping
   realtime/schemas.py               client/server Pydantic event models
   realtime/state.py                 buffers, VAD state, and committed turns
 app/transcription.py                transport-independent transcription use case
-app/audio/                          PCM, resampling, VAD, endpointing, stable prefix
+app/audio/                          PCM, resampling, endpointing, stable prefix
+app/vad/                            Energy, WebRTC, and direct-ONNX Silero providers
 app/engine/                         engine contracts, scheduler, ORT and decoders
 app/core/                           settings, lifespan, readiness, logging, shared types
 app/observability/                  metrics and tracing
@@ -120,13 +121,79 @@ uv run pytest -q
 # Production ORT/CUDA environment; excludes the development group
 uv sync --frozen --extra gpu --no-group dev
 
-# Only for the optional official Transformers wrapper engine, not the ORT service
+# Official Transformers wrapper with local CPU or CUDA inference
+uv sync --frozen --extra official-cpu
 uv sync --frozen --extra official-gpu
 ```
 
-Never use `uv sync --all-extras`: it would attempt to resolve mutually exclusive
-CPU and GPU runtime wheels. The production ORT image intentionally excludes the
-separate multi-gigabyte PyTorch stack.
+Never use `uv sync --all-extras`: each lean ORT or official-wrapper CPU/GPU
+runtime selects one mutually exclusive wheel set. The production ORT image
+intentionally excludes the separate multi-gigabyte PyTorch stack.
+
+## Voice activity detection
+
+VAD is a process-owned provider with one isolated stream per VAD-enabled
+connection. Both native 16 kHz PCM and OpenAI-compatible 24 kHz PCM enter as
+exact 20 ms frames. The selected provider owns model/resampler state, bounded
+CPU workers, pending admission, deadlines, and live-stream leases; transport
+handlers own protocol thresholds and endpoint state. A provider error fails the
+affected session instead of switching algorithms mid-utterance.
+
+| `ASR_VAD_PROVIDER` | Intended use | Production |
+| --- | --- | --- |
+| `disabled` | No classifier; every valid frame is retained until client commit | Explicit opt-out |
+| `silero` | Pinned Silero VAD 6.2.1 through direct CPU ONNX Runtime | Default Compose choice |
+| `webrtc` | Lightweight binary baseline; modes `0` through `3` | Explicit alternative |
+| `energy` | Deterministic normalized-RMS development/rollback provider | Rejected at startup |
+
+The local default is `energy`; production must explicitly select `disabled`,
+`silero`, or `webrtc`. With `disabled`, automatic endpointing is unavailable
+and clients must send `input.commit`.
+
+```dotenv
+ASR_VAD_PROVIDER=silero
+ASR_VAD_MODEL_PATH=/models/vad/silero-v6.2.1/silero_vad.onnx
+ASR_VAD_MODEL_SHA256=1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3
+ASR_VAD_MAX_STREAMS=128
+ASR_VAD_CPU_WORKERS=2
+ASR_VAD_PENDING_CAPACITY=128
+ASR_VAD_CLASSIFICATION_DEADLINE_SECONDS=0.1
+ASR_VAD_SPEECH_THRESHOLD=0.5
+ASR_WEBRTC_VAD_MODE=1
+```
+
+`ASR_VAD_SPEECH_THRESHOLD` is the native protocol override. OpenAI realtime
+uses the `server_vad.threshold` supplied in `session.update`. Silero consumes
+contiguous 512-sample windows while preserving its recurrent/context state;
+the 20 ms transport frame is never zero-padded or dropped. WebRTC resamples
+24 kHz input statefully to its exact 16 kHz frame contract.
+
+Provision or verify the immutable Silero ONNX model and license outside the
+serving process:
+
+```bash
+uv run python scripts/download_vad_model.py --output-dir /models/vad/silero-v6.2.1
+uv run python scripts/download_vad_model.py \
+  --output-dir /models/vad/silero-v6.2.1 --offline
+```
+
+The downloader pins the upstream revision and SHA-256 digests, publishes
+atomically, rejects symlinks/non-regular files, and is idempotent. Compose runs
+it in `model-init`; the serving container receives the completed volume
+read-only and remains offline.
+
+## Interactive API documentation
+
+FastAPI serves interactive Swagger UI at `/docs`, ReDoc at `/redoc`, and the
+OpenAPI 3.1 document at `/openapi.json`. Swagger provides upload controls and
+defaults for both `POST /v1/transcribe` and
+`POST /v1/audio/transcriptions`. Use **Authorize** to set the shared bearer API
+key before executing an inference request; keyless local development can leave
+it empty. Check `/health/ready` first.
+
+OpenAPI does not execute WebSocket protocols. The Swagger introduction lists
+both realtime URLs and their audio framing requirements; use the native or
+OpenAI realtime client examples below to exercise them.
 
 ## OpenAI-compatible API
 
@@ -390,6 +457,45 @@ uv run python scripts/verify_model.py \
 The inference service never downloads a model on the request path. It loads only
 the completed local snapshot with Hub and Transformers offline mode enabled.
 
+### Published Docker image matrix
+
+The public Docker Hub repository exposes four explicit Linux/amd64 variants:
+
+| Tag | Source | Runtime/VAD | OCI manifest digest |
+| --- | --- | --- | --- |
+| `cpu-no-vad` | `main` | CPU; no VAD package | `sha256:a233f24cc31fd94d080d99f3919ee18753d1db0b469946637538bf0cf6574918` |
+| `gpu-no-vad` | `main` | CUDA/TensorRT; no VAD package | `sha256:05470881ea523bc8d07f73b48eb560b33ee1ae31785b003f9707f39489db9093` |
+| `cpu-vad` | VAD branch | CPU; Silero/WebRTC/Energy | `sha256:44a35fee708d11050f9d0e92bf10740e51ec3a8c56c1690d770e11b3fa58552f` |
+| `gpu-vad` | VAD branch | CUDA/TensorRT; CPU Silero/WebRTC/Energy | `sha256:8ed92881a719c0e5e1aa0f3ea681a94eb6aab73cea04bfc79c17c761af7b3620` |
+
+All four tags are public and contain application dependencies only; ASR and
+Silero model weights remain external mounts. Pin deployments by the published
+digest rather than relying on a mutable tag. CPU variants default to
+`ASR_REQUIRE_CUDA=false` and are intended for CPU execution and validation.
+
+The VAD branch Dockerfile builds either accelerator dependency set:
+
+```bash
+# GPU + VAD (the default)
+docker build -f deploy/Dockerfile \
+  --build-arg UV_EXTRA=gpu \
+  -t shivam250/indicconformer-realtime-asr:gpu-vad .
+
+# CPU + VAD
+docker build -f deploy/Dockerfile \
+  --build-arg RUNTIME_IMAGE=ubuntu:22.04@sha256:0e0a0fc6d18feda9db1590da249ac93e8d5abfea8f4c3c0c849ce512b5ef8982 \
+  --build-arg UV_EXTRA=cpu \
+  --build-arg ASR_REQUIRE_CUDA=false \
+  -t shivam250/indicconformer-realtime-asr:cpu-vad .
+
+# CPU official-wrapper engine used for real local CPU transcription
+docker build -f deploy/Dockerfile \
+  --build-arg RUNTIME_IMAGE=ubuntu:22.04@sha256:0e0a0fc6d18feda9db1590da249ac93e8d5abfea8f4c3c0c849ce512b5ef8982 \
+  --build-arg UV_EXTRA=official-cpu \
+  --build-arg ASR_REQUIRE_CUDA=false \
+  -t indic-asr-local:cpu-official .
+```
+
 ### Compose deployment
 
 Prerequisites:
@@ -399,7 +505,7 @@ Prerequisites:
 - One GPU per ASR process.
 - A valid Hugging Face token file for the gated checkpoint.
 - An independent 32+ character API key file.
-- A private GHCR `read:packages` credential if the serving image remains private.
+- No registry credential is required for the public Docker Hub images.
 
 Create untracked local files:
 
@@ -413,7 +519,7 @@ chmod 600 .secrets/huggingface_token .secrets/api_key
 Create `.env`:
 
 ```dotenv
-ASR_IMAGE=ghcr.io/shivamb25/indicconformer-realtime-asr@sha256:<64-hex-image-digest>
+ASR_IMAGE=shivam250/indicconformer-realtime-asr:gpu-vad@sha256:8ed92881a719c0e5e1aa0f3ea681a94eb6aab73cea04bfc79c17c761af7b3620
 ASR_MODEL_REVISION=<40-hex-model-commit>
 HF_TOKEN_FILE=/absolute/path/to/.secrets/huggingface_token
 ASR_API_KEY_TOKEN_FILE=/absolute/path/to/.secrets/api_key
@@ -422,11 +528,9 @@ ASR_LISTEN_ADDRESS=127.0.0.1
 ASR_HOST_PORT=8000
 ```
 
-Authenticate to a private package, validate the rendered deployment, pull, then
-start it:
+Validate the rendered deployment, pull the public image, then start it:
 
 ```bash
-echo "$GHCR_READ_TOKEN" | docker login ghcr.io --username <github-user> --password-stdin
 docker compose -f deploy/compose.yaml config --quiet
 docker compose -f deploy/compose.yaml pull
 docker compose -f deploy/compose.yaml up --no-build
@@ -459,8 +563,10 @@ Use `/health/live` for restart decisions and `/health/ready` for load-balancer
 admission. Do not route production traffic until readiness is successful.
 
 Structured logs deliberately redact audio and transcript content. Prometheus
-metrics expose queue depth, admission/protocol errors, session lifecycle, audio
-seconds, and latency—not audio payloads or text.
+metrics expose scheduler/VAD queue depth, selected VAD provider, live VAD
+streams, decisions, endpoint events, bounded runtime errors, queue/inference
+latency, admission/protocol errors, session lifecycle, and audio seconds—not
+audio payloads or text. All label domains are closed.
 
 ## Benchmark and release gates
 
@@ -475,6 +581,27 @@ uv run python scripts/benchmark.py \
   --decoder ctc,rnnt \
   --output benchmark.json
 ```
+
+Compare Energy, WebRTC modes 0–3, and the pinned Silero model on the same
+labeled corpus:
+
+```bash
+uv run python scripts/benchmark_vad.py --self-check
+uv run python scripts/benchmark_vad.py \
+  --manifest /protected/vad/benchmark-manifest.json \
+  --silero-model /models/vad/silero-v6.2.1/silero_vad.onnx \
+  --max-concurrency 32 \
+  --output vad-benchmark.json
+```
+
+The VAD manifest is validated against
+`scripts/vad_benchmark_manifest.schema.json` and pins every audio/noise file by
+SHA-256. The report includes overall, per-language, per-condition, and
+per-variant frame F1, miss rate, false-positive time, false activations/hour,
+onset/endpoint p50/p95, CPU real-time factor, classification p50/p95,
+RSS/live-stream, and sustainable bounded concurrency. Run all providers on the
+same pre-generated noisy multilingual corpus; the synthetic self-check proves
+the pipeline only, not model quality.
 
 The benchmark filters mode/decoder selections to valid server mappings and
 gates p95 latency, real-time factor, and throughput without logging audio or
@@ -498,6 +625,14 @@ POST /v1/transcribe (hi, hybrid, 5.16 s) -> decoder=rnnt, HTTP 200
 GET /metrics                             -> Hindi hybrid transcription counter incremented
 ```
 
+The current VAD implementation was also exercised locally with the MockEngine:
+
+```text
+WS /v1/realtime (WebRTC VAD)             -> ready, speech.started, transcript.final
+WS /v1/realtime/transcription_sessions  -> one OpenAI speech/commit/delta/completed chain
+GET /metrics                             -> WebRTC selected and OpenAI endpoint incremented
+```
+
 The exercised audio was a Google FLEURS `hi_in` dev recording from its
 CC-BY-4.0 dataset, pinned at revision
 `70bb2e84b976b7e960aa89f1c648e09c59f894dd`. It was converted from IEEE-float
@@ -513,9 +648,8 @@ prove recognition accuracy because the test engine is intentionally synthetic.
 - Real IndicConformer transcription quality, WER/CER, throughput, or latency.
 - Model download on this host: unauthenticated access to the gated model returns
   `401` by design.
-- Pulling the private GHCR image on this host: the current GitHub credential
-  lacks `read:packages` and receives `403`. The successful local Docker image
-  smoke test used the locally built image.
+- Anonymous Docker Registry requests returned `200` for all four public tags;
+  their published OCI manifest digests are listed in the image matrix above.
 
 ## Next steps
 

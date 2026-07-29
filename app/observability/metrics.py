@@ -21,7 +21,7 @@ from prometheus_client import (
     generate_latest,
 )
 
-from app.core.types import LanguageCode, ProcessingMode
+from app.core.types import LanguageCode, ProcessingMode, VADKind
 
 _QUEUE_BUCKETS = (
     0.001,
@@ -86,6 +86,10 @@ class MetricCode(StrEnum):
 _LANGUAGES = frozenset(item.value for item in LanguageCode)
 _MODES = frozenset(item.value for item in ProcessingMode)
 _CODES = frozenset(item.value for item in MetricCode)
+_VAD_PROVIDERS = frozenset(item.value for item in VADKind)
+_VAD_PROTOCOLS = frozenset(("native", "openai"))
+_VAD_RESULTS = frozenset(("speech", "silence"))
+_VAD_ERRORS = frozenset(("capacity", "deadline", "inference"))
 
 # Every code is classified exactly once: a server error means the service
 # accepted work and failed it, a refusal means the input or state was declined.
@@ -155,10 +159,45 @@ def is_server_error(code: str | MetricCode) -> bool:
 
 
 def _nonnegative(value: float, name: str) -> float:
-    result = float(value)
+    message = f"{name} must be finite and non-negative"
+    if isinstance(value, bool):
+        raise ValueError(message)
+    try:
+        result = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(message) from exc
     if not math.isfinite(result) or result < 0:
-        raise ValueError(f"{name} must be finite and non-negative")
+        raise ValueError(message)
     return result
+
+
+def _normalize_vad_label(value: str, allowed: frozenset[str], name: str) -> str:
+    """Normalize one closed VAD label and reject values outside its domain."""
+
+    if not isinstance(value, str):
+        raise ValueError(f"VAD {name} must be one of {sorted(allowed)}")
+    result = value.strip().lower().replace("-", "_")
+    if result not in allowed:
+        raise ValueError(f"VAD {name} must be one of {sorted(allowed)}")
+    return result
+
+
+def _normalize_vad_provider(provider: str) -> str:
+    return _normalize_vad_label(provider, _VAD_PROVIDERS, "provider")
+
+
+def _normalize_vad_protocol(protocol: str) -> str:
+    return _normalize_vad_label(protocol, _VAD_PROTOCOLS, "protocol")
+
+
+def _normalize_vad_result(result: str | bool) -> str:
+    if isinstance(result, bool):
+        return "speech" if result else "silence"
+    return _normalize_vad_label(result, _VAD_RESULTS, "result")
+
+
+def _normalize_vad_error(error: str) -> str:
+    return _normalize_vad_label(error, _VAD_ERRORS, "error")
 
 
 class Metrics:
@@ -242,6 +281,66 @@ class Metrics:
             namespace="asr",
             registry=registry,
             buckets=_RTF_BUCKETS,
+        )
+        self._vad_stream_lock = Lock()
+        self._active_vad_streams: dict[str, int] = {}
+        self._selected_vad_provider: str | None = None
+        self._vad_provider = Gauge(
+            "vad_provider_info",
+            "Explicitly selected VAD provider.",
+            ("provider",),
+            namespace="asr",
+            registry=registry,
+        )
+        self._vad_live_streams = Gauge(
+            "vad_live_streams",
+            "Live VAD streams.",
+            ("provider",),
+            namespace="asr",
+            registry=registry,
+        )
+        self._vad_queue_depth = Gauge(
+            "vad_queue_depth",
+            "Queued VAD inference jobs.",
+            namespace="asr",
+            registry=registry,
+        )
+        self._vad_queue_wait = Histogram(
+            "vad_queue_wait_seconds",
+            "VAD inference queue wait.",
+            ("provider",),
+            namespace="asr",
+            registry=registry,
+            buckets=_QUEUE_BUCKETS,
+        )
+        self._vad_inference = Histogram(
+            "vad_inference_seconds",
+            "VAD inference latency.",
+            ("provider",),
+            namespace="asr",
+            registry=registry,
+            buckets=_LATENCY_BUCKETS,
+        )
+        self._vad_decisions = Counter(
+            "vad_decisions",
+            "VAD frame decisions.",
+            ("provider", "result"),
+            namespace="asr",
+            registry=registry,
+        )
+        self._vad_endpoint_events = Counter(
+            "vad_endpoint_events",
+            "VAD endpoint events.",
+            ("protocol",),
+            namespace="asr",
+            registry=registry,
+        )
+        self._vad_errors = Counter(
+            "vad_errors",
+            "VAD runtime errors.",
+            ("provider", "error"),
+            namespace="asr",
+            registry=registry,
         )
 
     @staticmethod
@@ -405,6 +504,71 @@ class Metrics:
             normalize_language(language),
             normalize_mode(mode),
         ).observe(_nonnegative(factor, "realtime factor"))
+
+    def set_vad_provider(self, provider: str) -> None:
+        """Expose the process-selected provider as a one-hot bounded gauge."""
+
+        normalized = _normalize_vad_provider(provider)
+        with self._vad_stream_lock:
+            previous = self._selected_vad_provider
+            if previous == normalized:
+                return
+            if previous is not None:
+                self._vad_provider.labels(previous).set(0)
+            self._vad_provider.labels(normalized).set(1)
+            self._selected_vad_provider = normalized
+
+    def vad_stream_started(self, provider: str) -> None:
+        """Increment the provider's live-stream gauge."""
+
+        normalized = _normalize_vad_provider(provider)
+        with self._vad_stream_lock:
+            active = self._active_vad_streams.get(normalized, 0) + 1
+            self._active_vad_streams[normalized] = active
+            self._vad_live_streams.labels(normalized).set(active)
+
+    def vad_stream_ended(self, provider: str) -> None:
+        """Decrement a live-stream gauge without allowing unmatched cleanup below zero."""
+
+        normalized = _normalize_vad_provider(provider)
+        with self._vad_stream_lock:
+            active = self._active_vad_streams.get(normalized, 0)
+            if active == 0:
+                self._vad_live_streams.labels(normalized).set(0)
+                return
+            active -= 1
+            self._active_vad_streams[normalized] = active
+            self._vad_live_streams.labels(normalized).set(active)
+
+    def set_vad_queue_depth(self, depth: int) -> None:
+        if isinstance(depth, bool) or not isinstance(depth, int) or depth < 0:
+            raise ValueError("VAD queue depth must be a non-negative integer")
+        self._vad_queue_depth.set(depth)
+
+    def record_vad_queue_wait(self, provider: str, seconds: float) -> None:
+        self._vad_queue_wait.labels(_normalize_vad_provider(provider)).observe(
+            _nonnegative(seconds, "VAD queue wait")
+        )
+
+    def record_vad_inference(self, provider: str, seconds: float) -> None:
+        self._vad_inference.labels(_normalize_vad_provider(provider)).observe(
+            _nonnegative(seconds, "VAD inference latency")
+        )
+
+    def record_vad_decision(self, provider: str, result: str | bool) -> None:
+        self._vad_decisions.labels(
+            _normalize_vad_provider(provider),
+            _normalize_vad_result(result),
+        ).inc()
+
+    def record_vad_endpoint_event(self, protocol: str) -> None:
+        self._vad_endpoint_events.labels(_normalize_vad_protocol(protocol)).inc()
+
+    def record_vad_runtime_error(self, provider: str, code: str) -> None:
+        self._vad_errors.labels(
+            _normalize_vad_provider(provider),
+            _normalize_vad_error(code),
+        ).inc()
 
 
 _LOCK = Lock()

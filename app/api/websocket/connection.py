@@ -21,15 +21,8 @@ from app.audio.endpoint import (
     EndpointEvent,
     PartialCadenceConfig,
 )
-from app.audio.pcm import (
-    PCM16_FRAME_BYTES,
-    SAMPLE_RATE,
-    PCM16Buffer,
-    PCMBufferOverflow,
-    decode_pcm16_frame,
-)
+from app.audio.pcm import PCM16_FRAME_BYTES, SAMPLE_RATE, PCM16Buffer, PCMBufferOverflow
 from app.audio.stable_prefix import RollingStablePrefix
-from app.audio.vad import EnergyVAD, EnergyVADConfig
 from app.core.logging import get_logger
 from app.core.types import Decoder, LanguageCode, ProcessingMode
 from app.engine.base import TranscriptionRequest
@@ -48,6 +41,12 @@ from app.schemas.protocol import (
     SpeechStartedEvent,
     TranscriptFinalEvent,
     TranscriptPartialEvent,
+)
+from app.vad.base import (
+    VADCapacityError,
+    VADClosedError,
+    VADInferenceError,
+    VADProvider,
 )
 
 _LOGGER = get_logger(__name__)
@@ -174,7 +173,29 @@ async def _serve_websocket(
                         "session.start contains invalid or unsupported fields",
                     )
                     return
-                session = _new_session(start, config)
+                provider = getattr(websocket.app.state, "vad_provider", None) if start.vad else None
+                try:
+                    session = _new_session(start, config, provider)
+                except VADCapacityError:
+                    await _locked_error(
+                        websocket,
+                        send_lock,
+                        "SERVER_BUSY",
+                        "voice activity detection capacity is exhausted",
+                        retryable=True,
+                    )
+                    await _close(websocket, 1013)
+                    return
+                except (VADInferenceError, VADClosedError):
+                    await _locked_error(
+                        websocket,
+                        send_lock,
+                        "INFERENCE_ERROR",
+                        "voice activity detection is unavailable",
+                        retryable=True,
+                    )
+                    await _close(websocket, 1011)
+                    return
                 async with send_lock:
                     await websocket.send_json(
                         SessionReadyEvent(session_id=session.session_id).model_dump(mode="json")
@@ -217,8 +238,14 @@ async def _serve_websocket(
             )
             await _close(websocket, 1011)
     finally:
-        if session is not None and session.partial_task is not None:
-            session.partial_task.cancel()
+        if session is not None:
+            if session.partial_task is not None:
+                session.partial_task.cancel()
+            if session.vad is not None:
+                try:
+                    session.vad.close()
+                except Exception:
+                    _LOGGER.exception("realtime_vad_close_failed", session_id=session.session_id)
         # Release the bounded slot before optional bookkeeping: a metrics backend that
         # raises must not permanently shrink session capacity.
         await registry.release()
@@ -226,7 +253,25 @@ async def _serve_websocket(
             metrics.session_ended()
 
 
-def _new_session(start: SessionStartEvent, config: WebSocketConfig) -> _LiveSession:
+def _record_vad_metric(websocket: WebSocket, method: str, *args: object) -> None:
+    metrics = getattr(websocket.app.state, "metrics", None)
+    if metrics is None:
+        return
+    try:
+        getattr(metrics, method)(*args)
+    except Exception:
+        _LOGGER.exception("realtime_vad_metrics_failed", metric=method)
+        try:
+            metrics.record_telemetry_failure()
+        except Exception:
+            _LOGGER.exception("realtime_metrics_failure_counter_failed")
+
+
+def _new_session(
+    start: SessionStartEvent,
+    config: WebSocketConfig,
+    provider: VADProvider | None,
+) -> _LiveSession:
     partial_decoder, final_decoder = {
         ProcessingMode.LATENCY: (Decoder.CTC, Decoder.CTC),
         ProcessingMode.HYBRID: (Decoder.CTC, Decoder.RNNT),
@@ -237,6 +282,17 @@ def _new_session(start: SessionStartEvent, config: WebSocketConfig) -> _LiveSess
         ProcessingMode.HYBRID: config.partial_hybrid_ms,
         ProcessingMode.ACCURACY: config.partial_accuracy_ms,
     }[start.mode]
+    vad = None
+    vad_provider_name = None
+    vad_threshold = None
+    if start.vad:
+        if provider is None:
+            raise VADClosedError("VAD provider is unavailable")
+        vad = provider.new_stream(16_000)
+        vad_provider_name = provider.name
+        vad_threshold = (
+            provider.default_threshold if config.vad_threshold is None else config.vad_threshold
+        )
     return _LiveSession(
         session_id=uuid4().hex,
         start=start,
@@ -250,7 +306,9 @@ def _new_session(start: SessionStartEvent, config: WebSocketConfig) -> _LiveSess
                 max_utterance_ms=config.max_utterance_ms,
             )
         ),
-        vad=EnergyVAD(EnergyVADConfig(config.vad_threshold)),
+        vad=vad,
+        vad_provider_name=vad_provider_name,
+        vad_threshold=vad_threshold,
         cadence=AdaptivePartialCadence(
             PartialCadenceConfig(
                 initial_ms=cadence_ms,
@@ -270,10 +328,41 @@ async def _handle_audio_frame(
     frame: bytes,
 ) -> bool:
     if session.start.vad:
-        samples = decode_pcm16_frame(frame)
+        vad = session.vad
+        threshold = session.vad_threshold
+        if vad is None or threshold is None:
+            raise VADClosedError("VAD stream is unavailable")
+        try:
+            score = await vad.score(frame)
+        except VADCapacityError:
+            await _locked_error(
+                websocket,
+                send_lock,
+                "SERVER_BUSY",
+                "voice activity detection capacity is exhausted",
+                retryable=True,
+            )
+            await _close(websocket, 1013)
+            return False
+        except (VADInferenceError, VADClosedError):
+            await _locked_error(
+                websocket,
+                send_lock,
+                "INFERENCE_ERROR",
+                "voice activity detection failed",
+                retryable=True,
+            )
+            await _close(websocket, 1011)
+            return False
         was_active = session.endpoint.active
-        is_speech = session.vad.is_speech(samples)
+        is_speech = score >= threshold
+        if session.vad_provider_name is not None:
+            _record_vad_metric(
+                websocket, "record_vad_decision", session.vad_provider_name, is_speech
+            )
         event = session.endpoint.process(is_speech)
+        if event is not EndpointEvent.NONE:
+            _record_vad_metric(websocket, "record_vad_endpoint_event", "native")
         keep_frame = was_active or is_speech
     else:
         event, keep_frame = EndpointEvent.NONE, True
@@ -404,6 +493,8 @@ async def _finalize(
     )
     session.buffer.clear()
     session.endpoint.reset()
+    if session.vad is not None:
+        session.vad.reset()
     try:
         result = await scheduler.submit_final(session.session_id, request)
     except ServerBusyError:
