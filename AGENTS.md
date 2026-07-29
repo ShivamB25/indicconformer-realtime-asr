@@ -58,6 +58,15 @@
   `official-gpu` for CUDA serving; never synchronize all extras.
 - Image builds must receive a dated immutable Ubuntu snapshot URL and exact
   package versions. Do not add mutable APT sources or guessed version defaults.
+- GitHub Actions currently pins `APT_SNAPSHOT_URL` to
+  `https://snapshot.ubuntu.com/ubuntu/20260701T000000Z/` with
+  `ca-certificates=20260601~22.04.1`, `libgomp1=12.3.0-1ubuntu1~22.04.3`,
+  `libsndfile1=1.0.31-2ubuntu0.2`, and `tini=0.19.0-1` in repository variables.
+  Move the snapshot and all four versions together after a reviewed rebuild.
+- GPU smoke repository variables point to
+  `ghcr.io/shivamb25/indicconformer-realtime-asr` and model revision
+  `e9b71b369c048e2c6b634d4c131061c34e441179`. Set the image digest only from
+  the published immutable SHA image; never guess or reuse a prior digest.
 - Publish only the SHA staging image before GPU smoke. Promote semantic/latest
   tags from that exact digest only after every protected GPU gate succeeds.
 - Serving containers use an internal network with published ingress and no
