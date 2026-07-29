@@ -21,7 +21,7 @@ import anyio
 from anyio import ClosedResourceError, EndOfStream
 from starlette.testclient import WebSocketTestSession
 
-REALTIME_PATH = "/v1/realtime"
+REALTIME_PATH = "/v1/realtime/native"
 RECEIVE_TIMEOUT_SECONDS = 10.0
 SILENCE_TIMEOUT_SECONDS = 0.25
 

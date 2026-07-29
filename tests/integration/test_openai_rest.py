@@ -1,14 +1,23 @@
 """Focused contracts for the OpenAI-compatible REST surface."""
 
-from typing import Any
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from threading import Thread
+from typing import Any, cast
 
 import pytest
 from fastapi.testclient import TestClient
 from openai import OpenAI
 
 from app.openai_compat import MODEL_ALIAS, MODEL_ID
+from app.openai_compat import audio as audio_compat
+from app.openai_compat.audio import (
+    AudioDurationExceeded,
+    InvalidAudioError,
+    decode_audio_file,
+)
 from app.openai_compat.schemas import OpenAIErrorEnvelope
-from tests.support.asgi import SchedulerDouble, scheduler_app
+from tests.support.asgi import SchedulerDouble, busy_scheduler, scheduler_app
 from tests.support.wav import pcm_bytes_for_ms, wav_bytes
 
 TRANSCRIPTIONS = "/v1/audio/transcriptions"
@@ -197,3 +206,114 @@ def test_unmodified_openai_client_transcribes_and_lists_models() -> None:
     assert plain_text == "sdk transcript"
     assert [model.id for model in models.data] == [MODEL_ID]
     assert retrieved.id == MODEL_ID
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"#EXTM3U\n#EXTINF:1,\nhttp://127.0.0.1:9/audio.wav\n",
+        b"ffconcat version 1.0\nfile '/etc/passwd'\n",
+    ],
+    ids=["hls_network_url", "concat_local_file"],
+)
+def test_nested_resource_containers_are_rejected_before_ffmpeg_opens_them(
+    monkeypatch: pytest.MonkeyPatch, payload: bytes
+) -> None:
+    def open_would_be_a_bug(*_: object, **__: object) -> object:
+        raise AssertionError("unsupported nested container reached FFmpeg")
+
+    monkeypatch.setattr(audio_compat.av, "open", open_would_be_a_bug)  # type: ignore[attr-defined]
+    with pytest.raises(InvalidAudioError, match="supported WAV, MP3, FLAC, M4A, or OGG"):
+        decode_audio_file(payload, max_audio_seconds=1)
+
+
+def test_oversize_pcm_wav_is_rejected_before_ffmpeg_float_decode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def open_would_be_a_bug(*_: object, **__: object) -> object:
+        raise AssertionError("oversize PCM reached FFmpeg")
+
+    monkeypatch.setattr(audio_compat.av, "open", open_would_be_a_bug)  # type: ignore[attr-defined]
+    with pytest.raises(AudioDurationExceeded, match="maximum duration"):
+        decode_audio_file(
+            wav_bytes(pcm_bytes_for_ms(1_020)),
+            max_audio_seconds=1,
+        )
+
+
+def test_openai_queue_saturation_is_one_bounded_rejection_metric() -> None:
+    with TestClient(scheduler_app(busy_scheduler())) as client:
+        response = client.post(TRANSCRIPTIONS, data=transcription_form(), files=audio_file())
+        metrics = client.get("/metrics").text
+
+    error = OpenAIErrorEnvelope.model_validate_json(response.text).error
+    assert response.status_code == 503
+    assert error.type == "server_error"
+    assert error.code == "server_busy"
+    assert 'asr_rejections_total{code="server_busy"} 1.0' in metrics
+    assert 'asr_errors_total{code="inference_error"}' not in metrics
+
+
+def test_non_runtime_engine_exceptions_use_the_safe_openai_503() -> None:
+    scheduler = SchedulerDouble(final_error=ValueError("private engine detail"))
+    with TestClient(scheduler_app(scheduler)) as client:
+        response = client.post(TRANSCRIPTIONS, data=transcription_form(), files=audio_file())
+        metrics = client.get("/metrics").text
+
+    error = OpenAIErrorEnvelope.model_validate_json(response.text).error
+    assert response.status_code == 503
+    assert error.type == "server_error"
+    assert error.code == "service_unavailable"
+    assert error.message == "Transcription is unavailable"
+    assert "private engine detail" not in response.text
+    assert 'asr_errors_total{code="inference_error"} 1.0' in metrics
+
+
+def test_hls_upload_makes_zero_outbound_requests() -> None:
+    class CountingHandler(BaseHTTPRequestHandler):
+        requests = 0
+
+        def do_GET(self) -> None:
+            type(self).requests += 1
+            self.send_response(404)
+            self.end_headers()
+
+        def log_message(self, format: str, *args: object) -> None:
+            del format, args
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), CountingHandler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = cast("tuple[str, int]", server.server_address)
+    playlist = f"#EXTM3U\n#EXTINF:1,\nhttp://{host}:{port}/audio.wav\n".encode()
+    try:
+        with pytest.raises(InvalidAudioError):
+            decode_audio_file(playlist, max_audio_seconds=1)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert CountingHandler.requests == 0
+
+
+def test_openai_http_requires_the_shared_bearer(tmp_path: Path) -> None:
+    token = "openai-test-service-key-that-is-long-enough"
+    key_file = tmp_path / "api.key"
+    key_file.write_text(token, encoding="utf-8")
+    app = scheduler_app(SchedulerDouble(), api_key_file=key_file)
+    with TestClient(app) as client:
+        rejected = client.post(TRANSCRIPTIONS, data=transcription_form(), files=audio_file())
+        accepted = client.post(
+            TRANSCRIPTIONS,
+            data=transcription_form(),
+            files=audio_file(),
+            headers={"authorization": f"Bearer {token}"},
+        )
+
+    error = OpenAIErrorEnvelope.model_validate_json(rejected.text).error
+    assert rejected.status_code == 401
+    assert rejected.headers["www-authenticate"] == "Bearer"
+    assert error.type == "authentication_error"
+    assert error.code == "invalid_api_key"
+    assert accepted.status_code == 200

@@ -28,6 +28,7 @@ from app.vad.artifact import (  # noqa: E402
     SILERO_VAD_MODEL_URL,
     SILERO_VAD_REVISION,
 )
+from scripts._atomic_directory import fsync_directory, publish_directory  # noqa: E402
 
 MODEL_MAX_BYTES = 4 * 1024 * 1024
 LICENSE_MAX_BYTES = 16 * 1024
@@ -221,14 +222,6 @@ def _download_artifact(spec: ArtifactSpec, destination: Path) -> None:
         raise VADModelValidationError(f"SHA-256 mismatch for {spec.filename}")
 
 
-def _fsync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-
-
 def provision_vad_model(destination: Path, *, offline: bool = False) -> None:
     """Verify an existing pin or download and atomically publish it."""
 
@@ -249,23 +242,14 @@ def provision_vad_model(destination: Path, *, offline: bool = False) -> None:
         raise VADModelValidationError("VAD model parent path must be a real directory")
 
     staging = Path(tempfile.mkdtemp(prefix=f".{destination.name}.staging-", dir=destination.parent))
-    published = False
     try:
         for spec in specs:
             _download_artifact(spec, staging / spec.filename)
         verify_vad_model(staging)
-        _fsync_directory(staging)
-        try:
-            os.rename(staging, destination)
-            published = True
-            _fsync_directory(destination.parent)
-        except OSError:
-            if destination.exists() and not destination.is_symlink():
-                verify_vad_model(destination)
-            else:
-                raise
+        fsync_directory(staging)
+        publish_directory(staging, destination, verify_vad_model)
     finally:
-        if not published and staging.exists():
+        if staging.exists():
             shutil.rmtree(staging)
 
 

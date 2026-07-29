@@ -3,13 +3,15 @@
 ## Runtime contracts
 
 - Treat `POST /v1/audio/transcriptions`, `GET /v1/models`, and
-  `WS /v1/realtime/transcription_sessions` as the OpenAI-compatible public API.
-- Keep `POST /v1/transcribe` and binary `WS /v1/realtime` backward compatible;
+  `WS /v1/realtime` as the OpenAI-compatible public API.
+- Keep `POST /v1/transcribe` and binary `WS /v1/realtime/native` backward compatible;
   they are separate native protocols, not aliases for the OpenAI adapters.
 - Route every inference surface through the shared scheduler. Never run model
   inference on the asyncio event loop or bypass bounded admission control.
-- Require an explicit supported language. The checkpoint does not provide
-  trustworthy automatic language detection.
+- Require an explicit supported language. The checkpoint uses it to select a
+  CTC language mask/vocabulary or language-specific RNNT joint network and has no
+  LID head. `auto` requires a separately trained and calibrated 22-class spoken-LID
+  model that resolves to a supported code before inference; do not simulate it.
 - Keep decoder policy server-owned: CTC for partial/latency work and RNNT for
   hybrid/accuracy finals.
 - Keep VAD provider-neutral: process-owned `VADProvider`, one connection-owned
@@ -49,12 +51,19 @@
 - Never put model weights, Hugging Face credentials, API keys, audio, or
   transcripts in source, images, logs, metrics, fixtures, or CI artifacts.
 - Model loading is local-only and revision-pinned. Do not add request-time Hub
-  downloads or CPU fallback to the production ORT engine.
-- CPU and GPU ONNX Runtime extras conflict. The official-wrapper CPU/GPU extras
-  also conflict with each other and with the lean ORT extras. Use
-  `--extra cpu --group dev` for local/CI work, `--extra gpu --no-group dev` for
-  the ORT serving image, and exactly one of `official-cpu` or `official-gpu`
-  when running the trusted Transformers wrapper; never synchronize all extras.
+  downloads or CPU fallback when CUDA is required by the official engine.
+- The only runtime extras are `official-cpu` and `official-gpu`; they conflict.
+  Each contains the matching Torch/torchaudio stack and ONNX Runtime package used
+  by Silero. Select `official-cpu` for local/CI and real CPU serving, or
+  `official-gpu` for CUDA serving; never synchronize all extras.
+- Image builds must receive a dated immutable Ubuntu snapshot URL and exact
+  package versions. Do not add mutable APT sources or guessed version defaults.
+- Publish only the SHA staging image before GPU smoke. Promote semantic/latest
+  tags from that exact digest only after every protected GPU gate succeeds.
+- Serving containers use an internal network with published ingress and no
+  external route. Provisioning retains egress; do not attach serving to it.
+- Prepare Compose/runtime secrets as UID/GID 10001, directory `0700`, file `0400`,
+  and mount them read-only. Compose bind-secret mode/uid fields are not sufficient.
 - Production VAD must be `disabled`, `silero`, or `webrtc`; `disabled` requires
   client commits because it performs no automatic endpointing. `energy` is an
   explicit development/rollback implementation and must continue to fail
@@ -82,10 +91,9 @@
 - Both containers use `restart=unless-stopped`. The existing
   `cloudflared.service` is a remotely managed token tunnel; configure durable
   public hostnames in Cloudflare, never with ephemeral quick tunnels.
-- Both deployments share the bearer secret at
-  `/home/ubuntu/ai4bharatASR/.secrets/cpu_api_key`. Store its client-side value
-  as `ASR_API_KEY`; never copy the value into this repository, prompts,
-  frontend code, logs, or test fixtures.
+- Both deployments share a bearer secret from one untracked host-restricted
+  file. Store its client-side value as `ASR_API_KEY`; never copy the value into
+  this repository, prompts, frontend code, logs, or test fixtures.
 - Public `/health/ready`, real Hindi REST transcription, and permanent WSS
   `session.ready` were verified for both hostnames. Re-verify all three after
   changing containers, origins, tunnel routes, authentication, or model assets.
@@ -105,8 +113,8 @@
   item correlation, and per-item delta-before-completed ordering.
 - Run `uv run ruff format --check app scripts tests`, `uv run ruff check app scripts tests`,
   `uv run mypy app tests`, and `uv run pytest -q` before release.
-- CUDA provider selection, no-CPU-fallback, warmup, model quality, and latency
-  claims require the protected GPU workflow on an actual NVIDIA runner.
+- Official CUDA availability, no-CPU-fallback, warmup, model quality, and
+  latency claims require the protected GPU workflow on an actual NVIDIA runner.
 - VAD changes require contract coverage at 16 kHz and 24 kHz, exact-frame
   fragmentation, stream isolation/release, reset/final/disconnect paths,
   threshold boundaries, capacity/deadline/inference failures, and native plus

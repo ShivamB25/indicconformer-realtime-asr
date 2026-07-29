@@ -6,7 +6,7 @@ GPU-first, real-time ASR for
 The service accepts Indian-language audio over REST or a streaming WebSocket. It
 keeps model execution off the asyncio event loop, gives final results priority
 over partials, and fails closed in production unless the exact local model
-snapshot and CUDA execution provider are healthy.
+snapshot and configured official CPU/CUDA runtime are healthy.
 
 > **Status:** the transport, scheduling, deployment, health, and observability
 > contracts are implemented and CPU-tested. The real model is gated and this
@@ -27,7 +27,7 @@ FastAPI gateway
   +-- final-first, bounded, dynamic-batching scheduler
         |
         v
-ONNX Runtime CUDA engine
+Official AI4Bharat IndicConformer engine (Torch/Transformers)
   +-- CTC partials (latency mode)
   +-- RNNT finals (hybrid and accuracy modes)
         |
@@ -35,9 +35,10 @@ ONNX Runtime CUDA engine
 transcript events / HTTP response / Prometheus metrics
 ```
 
-One ASR process owns one GPU. WebSocket connections must remain sticky to that
-process for their entire lifetime. The scheduler allows only one outstanding
-partial per session, supersedes stale partial work, length-buckets compatible
+In CUDA deployments, one ASR process owns one GPU. WebSocket connections must
+remain sticky to that process for their entire lifetime. The scheduler allows
+only one outstanding partial per session, supersedes stale partial work,
+length-buckets compatible
 requests, and drains active inference before shutdown.
 
 ### Code organization
@@ -59,7 +60,7 @@ app/openai_compat/                  OpenAI-specific wire contracts and mapping
 app/transcription.py                transport-independent transcription use case
 app/audio/                          PCM, resampling, endpointing, stable prefix
 app/vad/                            Energy, WebRTC, and direct-ONNX Silero providers
-app/engine/                         engine contracts, scheduler, ORT and decoders
+app/engine/                         engine contracts, scheduler, official wrapper
 app/core/                           settings, lifespan, readiness, logging, shared types
 app/observability/                  metrics and tracing
 ```
@@ -72,7 +73,15 @@ cycles and make CodeGraph call paths unambiguous.
 
 ## Supported languages and modes
 
-Language selection is required. The supported codes are:
+Language selection is required. “Multilingual” means one checkpoint supports
+22 caller-selected languages, not that it detects the language. The pinned
+checkpoint's [official examples](https://huggingface.co/ai4bharat/indic-conformer-600m-multilingual/resolve/e9b71b369c048e2c6b634d4c131061c34e441179/README.md)
+always pass a language code, and its [custom model implementation](https://huggingface.co/ai4bharat/indic-conformer-600m-multilingual/resolve/e9b71b369c048e2c6b634d4c131061c34e441179/model_onnx.py)
+uses that code to select a language mask/vocabulary for CTC or a language-specific
+RNNT joint network. It has no language-identification head. Shipping `auto` would
+therefore require a separately trained and calibrated 22-class spoken-language
+identifier that resolves to one supported code before IndicConformer inference;
+that separate model is future work. The supported codes are:
 
 ```text
 as  bn  brx doi gu  hi  kn  kok ks  mai ml
@@ -95,7 +104,7 @@ protocol, scheduler, health, and deployment integration. It does **not** perform
 speech recognition and must never be used to evaluate transcription quality.
 
 ```bash
-uv sync --frozen --extra cpu --group dev
+uv sync --frozen --extra official-cpu --group dev
 ASR_ENGINE=mock uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
@@ -107,28 +116,27 @@ curl -fsS http://127.0.0.1:8000/health/ready
 curl -fsS http://127.0.0.1:8000/metrics
 ```
 
-Dependencies are pinned in `uv.lock`. CPU and GPU ORT packages intentionally
-conflict; do not synchronize them together.
+Dependencies are pinned in `uv.lock`. The standalone `official-cpu` and
+`official-gpu` variants intentionally conflict; select exactly one. Each variant
+also supplies the matching ONNX Runtime package used by Silero VAD.
 
 ```bash
 # CPU development, lint, typing, and test environment
-uv sync --frozen --extra cpu --group dev
+uv sync --frozen --extra official-cpu --group dev
 uv run ruff format --check app scripts tests
 uv run ruff check app scripts tests
 uv run mypy app
 uv run pytest -q
 
-# Production ORT/CUDA environment; excludes the development group
-uv sync --frozen --extra gpu --no-group dev
+# Real CPU production/runtime environment
+uv sync --frozen --extra official-cpu --no-group dev
 
-# Official Transformers wrapper with local CPU or CUDA inference
-uv sync --frozen --extra official-cpu
-uv sync --frozen --extra official-gpu
+# Real CUDA production/runtime environment
+uv sync --frozen --extra official-gpu --no-group dev
 ```
 
-Never use `uv sync --all-extras`: each lean ORT or official-wrapper CPU/GPU
-runtime selects one mutually exclusive wheel set. The production ORT image
-intentionally excludes the separate multi-gigabyte PyTorch stack.
+Never use `uv sync --all-extras`: the official CPU and GPU variants select
+mutually exclusive Torch, torchaudio, and ONNX Runtime wheel sets.
 
 ## Voice activity detection
 
@@ -216,12 +224,12 @@ GET  /openapi.json
 POST /v1/transcribe
 POST /v1/audio/transcriptions
 WSS  /v1/realtime
-WSS  /v1/realtime/transcription_sessions
+WSS  /v1/realtime/native
 ```
 
-Both deployments use one shared bearer key. Its value exists only in the
-untracked host file `/home/ubuntu/ai4bharatASR/.secrets/cpu_api_key`; supply it
-to clients through the `ASR_API_KEY` environment variable and send
+Both deployments use one shared bearer key stored in an untracked,
+host-restricted file. Supply its client-side value through the `ASR_API_KEY`
+environment variable and send
 `Authorization: Bearer <key>`. Never paste the value into prompts, source,
 frontend bundles, logs, or Git.
 
@@ -276,7 +284,7 @@ Every OpenAI REST response includes `x-request-id`.
 
 ### OpenAI realtime transcription
 
-Connect to `wss://HOST/v1/realtime/transcription_sessions`. This is the current
+Connect to `wss://HOST/v1/realtime`. This is the current
 GA transcription-session event contract, separate from the native binary
 protocol:
 
@@ -363,8 +371,8 @@ are not reported as successful transcripts.
 
 ## Native WebSocket API
 
-Connect to `ws://HOST:PORT/v1/realtime` locally or `wss://…/v1/realtime` behind
-TLS. The wire contract is deliberately strict:
+Connect to `ws://HOST:PORT/v1/realtime/native` locally or
+`wss://…/v1/realtime/native` behind TLS. The wire contract is deliberately strict:
 
 1. Send exactly one JSON `session.start` event.
 2. Send raw binary PCM16LE audio frames only: **mono, 16 kHz, exactly 20 ms** per
@@ -408,7 +416,7 @@ split it into exact 640-byte buffers. Do not send WAV headers or arbitrary sized
 
 ```js
 const token = "read-from-your-auth-flow";
-const ws = new WebSocket("wss://asr.example.com/v1/realtime");
+const ws = new WebSocket("wss://asr.example.com/v1/realtime/native");
 ws.binaryType = "arraybuffer";
 
 ws.addEventListener("open", () => {
@@ -499,69 +507,84 @@ uv run python scripts/verify_model.py \
 The inference service never downloads a model on the request path. It loads only
 the completed local snapshot with Hub and Transformers offline mode enabled.
 
-### Published Docker image matrix
+### Container image variants and release promotion
 
-The public Docker Hub repository exposes four explicit Linux/amd64 variants:
+The Dockerfile has one production engine (`official`) and two standalone locked
+runtime variants:
 
-| Tag | Source | Runtime/VAD | OCI manifest digest |
+| `UV_EXTRA` | Base | `ASR_REQUIRE_CUDA` | Intended deployment |
 | --- | --- | --- | --- |
-| `cpu-no-vad` | `main` | CPU; no VAD package | `sha256:a233f24cc31fd94d080d99f3919ee18753d1db0b469946637538bf0cf6574918` |
-| `gpu-no-vad` | `main` | CUDA/TensorRT; no VAD package | `sha256:05470881ea523bc8d07f73b48eb560b33ee1ae31785b003f9707f39489db9093` |
-| `cpu-vad` | VAD branch | CPU; Silero/WebRTC/Energy | `sha256:44a35fee708d11050f9d0e92bf10740e51ec3a8c56c1690d770e11b3fa58552f` |
-| `gpu-vad` | VAD branch | CUDA/TensorRT; CPU Silero/WebRTC/Energy | `sha256:8ed92881a719c0e5e1aa0f3ea681a94eb6aab73cea04bfc79c17c761af7b3620` |
+| `official-gpu` (default) | digest-pinned CUDA/cuDNN | `true` | NVIDIA production |
+| `official-cpu` | digest-pinned Ubuntu | `false` | real CPU production |
 
-All four tags are public and contain application dependencies only; ASR and
-Silero model weights remain external mounts. Pin deployments by the published
-digest rather than relying on a mutable tag. CPU variants default to
-`ASR_REQUIRE_CUDA=false` and are intended for CPU execution and validation.
+Both include Torch/torchaudio/Transformers for the official engine and the
+selected ONNX Runtime package for Silero. Model weights remain external
+read-only mounts.
 
-The VAD branch Dockerfile builds either accelerator dependency set:
+Ubuntu does not provide a repository-owned, trustworthy immutable package
+snapshot/version set here. Builds therefore fail unless all five APT inputs are
+provided: a dated `https://snapshot.ubuntu.com/ubuntu/YYYYMMDDThhmmssZ/` URL and
+exact versions for `ca-certificates`, `libgomp1`, `libsndfile1`, and `tini` that
+exist in that snapshot. Do not invent or copy mutable “latest” versions. Release
+CI receives these values from reviewed repository variables.
 
 ```bash
-# GPU + VAD (the default)
-docker build -f deploy/Dockerfile \
-  --build-arg UV_EXTRA=gpu \
-  -t shivam250/indicconformer-realtime-asr:gpu-vad .
+# Values must come from one reviewed Ubuntu snapshot.
+export APT_SNAPSHOT_URL=https://snapshot.ubuntu.com/ubuntu/<YYYYMMDDThhmmssZ>/
+export APT_CA_CERTIFICATES_VERSION=<exact-version>
+export APT_LIBGOMP1_VERSION=<exact-version>
+export APT_LIBSNDFILE1_VERSION=<exact-version>
+export APT_TINI_VERSION=<exact-version>
 
-# CPU + VAD
+# Default: official GPU engine.
 docker build -f deploy/Dockerfile \
-  --build-arg RUNTIME_IMAGE=ubuntu:22.04@sha256:0e0a0fc6d18feda9db1590da249ac93e8d5abfea8f4c3c0c849ce512b5ef8982 \
-  --build-arg UV_EXTRA=cpu \
-  --build-arg ASR_REQUIRE_CUDA=false \
-  -t shivam250/indicconformer-realtime-asr:cpu-vad .
+  --build-arg APT_SNAPSHOT_URL \
+  --build-arg APT_CA_CERTIFICATES_VERSION \
+  --build-arg APT_LIBGOMP1_VERSION \
+  --build-arg APT_LIBSNDFILE1_VERSION \
+  --build-arg APT_TINI_VERSION \
+  -t indicconformer-realtime-asr:official-gpu .
 
-# CPU official-wrapper engine used for real local CPU transcription
+# Real CPU production image.
 docker build -f deploy/Dockerfile \
   --build-arg RUNTIME_IMAGE=ubuntu:22.04@sha256:0e0a0fc6d18feda9db1590da249ac93e8d5abfea8f4c3c0c849ce512b5ef8982 \
   --build-arg UV_EXTRA=official-cpu \
   --build-arg ASR_REQUIRE_CUDA=false \
-  -t indic-asr-local:cpu-official .
+  --build-arg APT_SNAPSHOT_URL \
+  --build-arg APT_CA_CERTIFICATES_VERSION \
+  --build-arg APT_LIBGOMP1_VERSION \
+  --build-arg APT_LIBSNDFILE1_VERSION \
+  --build-arg APT_TINI_VERSION \
+  -t indicconformer-realtime-asr:official-cpu .
 ```
+
+Image CI first publishes only `sha-<full-commit>` plus its immutable digest,
+SBOM, and provenance. A semantic version tag and `latest` are promoted from that
+same digest only after both protected H100 and L40S GPU jobs succeed. A failed or
+cancelled GPU gate cannot publish release tags.
 
 ### Compose deployment
 
 Prerequisites:
 
-- NVIDIA driver compatible with the pinned CUDA base image and NVIDIA Container
-  Toolkit installed on the host.
-- One GPU per ASR process.
+- For the GPU profile, a compatible NVIDIA driver and NVIDIA Container Toolkit.
 - A valid Hugging Face token file for the gated checkpoint.
 - An independent 32+ character API key file.
-- No registry credential is required for the public Docker Hub images.
+- A full 40-character model revision.
 
-Create untracked local files:
+Create untracked local files without a trailing newline:
 
 ```bash
 mkdir -p .secrets
-printf '%s' '<hf-read-token>' > .secrets/huggingface_token
-printf '%s' '<long-random-api-key>' > .secrets/api_key
-chmod 600 .secrets/huggingface_token .secrets/api_key
+(umask 077; printf '%s' '<hf-read-token>' > .secrets/huggingface_token)
+(umask 077; printf '%s' '<long-random-api-key>' > .secrets/api_key)
 ```
 
-Create `.env`:
+Create `.env` for a prebuilt immutable image (APT variables are needed only when
+building locally):
 
 ```dotenv
-ASR_IMAGE=shivam250/indicconformer-realtime-asr:gpu-vad@sha256:8ed92881a719c0e5e1aa0f3ea681a94eb6aab73cea04bfc79c17c761af7b3620
+ASR_IMAGE=ghcr.io/owner/indicconformer-realtime-asr@sha256:<image-digest>
 ASR_MODEL_REVISION=<40-hex-model-commit>
 HF_TOKEN_FILE=/absolute/path/to/.secrets/huggingface_token
 ASR_API_KEY_TOKEN_FILE=/absolute/path/to/.secrets/api_key
@@ -570,36 +593,47 @@ ASR_LISTEN_ADDRESS=127.0.0.1
 ASR_HOST_PORT=8000
 ```
 
-Validate the rendered deployment, pull the public image, then start it:
+Validate and start exactly one accelerator profile:
 
 ```bash
-docker compose -f deploy/compose.yaml config --quiet
-docker compose -f deploy/compose.yaml pull
-docker compose -f deploy/compose.yaml up --no-build
+# GPU production
+docker compose -f deploy/compose.yaml --profile gpu config --quiet
+docker compose -f deploy/compose.yaml --profile gpu up --no-build asr-gpu
+
+# Real CPU production
+docker compose -f deploy/compose.yaml --profile cpu config --quiet
+docker compose -f deploy/compose.yaml --profile cpu up --no-build asr-cpu
 ```
 
-`model-init` is the sole network-enabled model step. The ASR process mounts the
-completed model volume read-only, runs non-root, uses a read-only root filesystem,
-drops Linux capabilities, requires CUDA, and exposes port 8000 on loopback by
-default. `/health/ready` stays unavailable until snapshot verification, CUDA EP
-selection without CPU fallback, ONNX session initialization, warmup, and
-scheduler startup all succeed.
+For a local build, export the five reviewed APT values shown above, then use
+`docker compose -f deploy/compose.yaml --profile cpu build asr-cpu` or the GPU
+equivalent before `up`.
 
-For multiple GPUs, run one replica per GPU and keep every WebSocket session
-pinned to its selected replica.
+`secret-init` is networkless and copies each Compose secret into its own named
+volume as UID/GID 10001 with directory mode `0700` and file mode `0400`; the
+runtime services mount only the secret they need, read-only. This avoids the
+Compose bind-secret UID/mode limitation without making host files world-readable.
+`model-init` alone retains provisioning egress. Serving attaches only to an
+`internal: true` network: published host ingress remains available, but the ASR
+container has no external route. It also runs non-root with a read-only root,
+drops all capabilities, mounts verified models read-only, waits up to 150 seconds
+for application shutdown, and receives a 180-second container stop grace period.
+
+For multiple GPUs, run one process per GPU and keep every WebSocket session
+pinned to its selected process.
 
 ## Operations
 
 | Endpoint | Meaning |
 | --- | --- |
 | `GET /health/live` | Process/event-loop liveness only; never invokes inference |
-| `GET /health/ready` | Exact model, CUDA, warmup, and scheduler readiness |
+| `GET /health/ready` | Exact model, configured device, warmup, and scheduler readiness |
 | `GET /metrics` | Prometheus counters, gauges, and latency histograms |
 | `POST /v1/audio/transcriptions` | OpenAI-compatible bounded audio transcription |
 | `GET /v1/models` | OpenAI-compatible model discovery |
-| `WS /v1/realtime/transcription_sessions` | OpenAI GA realtime transcription events |
+| `WS /v1/realtime` | OpenAI GA realtime transcription events |
 | `POST /v1/transcribe` | Native bounded PCM transcription |
-| `WS /v1/realtime` | Native low-overhead PCM16 transcription |
+| `WS /v1/realtime/native` | Native low-overhead PCM16 transcription |
 
 Use `/health/live` for restart decisions and `/health/ready` for load-balancer
 admission. Do not route production traffic until readiness is successful.
@@ -617,6 +651,7 @@ uv run python scripts/benchmark.py --self-check
 uv run python scripts/benchmark.py \
   --base-url http://127.0.0.1:8000 \
   --manifest /protected/golden/benchmark-manifest.json \
+  --api-key-file /absolute/path/to/asr_api_key \
   --concurrency 1,2,4 \
   --duration-seconds 30,120 \
   --mode latency,hybrid,accuracy \
@@ -650,15 +685,13 @@ gates p95 latency, real-time factor, and throughput without logging audio or
 transcript content. CPU CI remains offline with MockEngine. The GPU workflow is
 restricted to protected self-hosted NVIDIA runners and requires an immutable
 image digest, exact model revision, protected multilingual golden manifest,
-CUDA provider validation, all-language warmup, and benchmark thresholds.
+official CUDA availability, all-language warmup, and benchmark thresholds.
 
 ## Verification and limitations
 
 ### Observed on this CPU workstation
 
-A local Docker image was built from the locked production ORT dependency set.
-Inside that image, `onnxruntime` was present and `torch` was absent. The container
-then ran with the deterministic MockEngine and successfully handled:
+A local container running the deterministic MockEngine successfully handled:
 
 ```text
 GET /health/live                         -> {"status":"live"}
@@ -670,8 +703,8 @@ GET /metrics                             -> Hindi hybrid transcription counter i
 The current VAD implementation was also exercised locally with the MockEngine:
 
 ```text
-WS /v1/realtime (WebRTC VAD)             -> ready, speech.started, transcript.final
-WS /v1/realtime/transcription_sessions  -> one OpenAI speech/commit/delta/completed chain
+WS /v1/realtime/native (WebRTC VAD)             -> ready, speech.started, transcript.final
+WS /v1/realtime  -> one OpenAI speech/commit/delta/completed chain
 GET /metrics                             -> WebRTC selected and OpenAI endpoint incremented
 ```
 
@@ -690,8 +723,6 @@ prove recognition accuracy because the test engine is intentionally synthetic.
 - Real IndicConformer transcription quality, WER/CER, throughput, or latency.
 - Model download on this host: unauthenticated access to the gated model returns
   `401` by design.
-- Anonymous Docker Registry requests returned `200` for all four public tags;
-  their published OCI manifest digests are listed in the image matrix above.
 
 ## Next steps
 
@@ -699,13 +730,13 @@ prove recognition accuracy because the test engine is intentionally synthetic.
    least-privilege Hugging Face read token; provision and verify an exact model
    commit using the downloader.
 2. **Use a real NVIDIA host.** Confirm driver/CUDA compatibility, mount the
-   verified snapshot read-only, and start Compose with `ASR_ENGINE=ort`.
+   verified snapshot read-only, and start the official GPU Compose profile.
 3. **Run the GPU release gate.** Exercise every supported language with a
    protected multilingual golden corpus; record WER/CER, p50/p95 latency,
    real-time factor, throughput, GPU memory, and queue behavior.
 4. **Validate streaming clients.** Test real microphone resampling, exact
    640-byte framing, endpoint behavior under speech/silence, reconnects,
    backpressure, and sticky-session routing through the production ingress.
-5. **Only then tune.** TensorRT, FP16/TF32 policy changes, CUDA Graph capture,
-   and a compiled RNNT decoder remain intentionally disabled until target-GPU
-   profiling shows gains without multilingual WER/CER regression.
+5. **Only then tune.** Precision or compilation changes remain intentionally
+   disabled until target-GPU profiling shows gains without multilingual WER/CER
+   regression through the official model path.

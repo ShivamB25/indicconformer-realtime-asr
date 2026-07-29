@@ -11,6 +11,7 @@ class CheckStatus(StrEnum):
     READY = "ready"
     DISABLED = "disabled"
     FAILED = "failed"
+    STOPPING = "stopping"
     STOPPED = "stopped"
 
 

@@ -15,6 +15,7 @@ from app.core.config import Settings
 from app.core.logging import get_logger
 from app.core.types import Decoder, LanguageCode, ProcessingMode
 from app.engine.base import TranscriptionRequest, TranscriptionResult
+from app.engine.scheduler import ServerBusyError
 from app.observability.metrics import MetricCode, Metrics
 from app.schemas.rest import ErrorResponse, TranscriptionResponse
 from app.transcription import record_success, run_transcription
@@ -23,8 +24,10 @@ router = APIRouter(prefix="/v1", tags=["transcription"])
 _LOGGER = get_logger(__name__)
 
 
-def _decode_pcm_upload(payload: bytes) -> np.ndarray:
-    """Decode either a mono PCM WAV container or headerless pcm_s16le."""
+def _decode_pcm_upload(payload: bytes, *, max_samples: int) -> np.ndarray:
+    """Decode bounded mono PCM without allocating float output for oversize audio."""
+    if max_samples <= 0:
+        raise ValueError("max_samples must be positive")
     pcm = payload
     if payload.startswith(b"RIFF"):
         try:
@@ -37,6 +40,8 @@ def _decode_pcm_upload(payload: bytes) -> np.ndarray:
                     raise ValueError("audio sample rate must be 16000 Hz")
                 if source.getcomptype() != "NONE":
                     raise ValueError("compressed WAV audio is not supported")
+                if source.getnframes() > max_samples:
+                    raise OverflowError("audio duration exceeds configured limit")
                 pcm = source.readframes(source.getnframes())
         except (EOFError, wave.Error) as exc:
             raise ValueError("invalid WAV container") from exc
@@ -44,6 +49,8 @@ def _decode_pcm_upload(payload: bytes) -> np.ndarray:
         raise ValueError("audio is empty")
     if len(pcm) % 2:
         raise ValueError("pcm_s16le audio must contain complete samples")
+    if len(pcm) // 2 > max_samples:
+        raise OverflowError("audio duration exceeds configured limit")
     samples = np.frombuffer(pcm, dtype="<i2")
     return samples.astype(np.float32) / 32768.0
 
@@ -138,7 +145,12 @@ async def transcribe(
             "audio upload exceeds configured limit",
         )
     try:
-        waveform = _decode_pcm_upload(payload)
+        waveform = _decode_pcm_upload(
+            payload, max_samples=settings.max_audio_seconds * settings.sample_rate
+        )
+    except OverflowError as exc:
+        metrics.record_rejection(MetricCode.UPLOAD_TOO_LARGE)
+        raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, str(exc)) from exc
     except ValueError as exc:
         metrics.record_rejection(MetricCode.INVALID_AUDIO)
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
@@ -164,7 +176,12 @@ async def transcribe(
     except TimeoutError as exc:
         metrics.record_error(MetricCode.TIMEOUT)
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "transcription timed out") from exc
-    except RuntimeError as exc:
+    except ServerBusyError as exc:
+        metrics.record_rejection(MetricCode.SERVER_BUSY)
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "transcription is unavailable"
+        ) from exc
+    except Exception as exc:
         metrics.record_error(MetricCode.INFERENCE_ERROR)
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE, "transcription is unavailable"

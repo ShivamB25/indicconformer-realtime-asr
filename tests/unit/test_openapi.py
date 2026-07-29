@@ -17,6 +17,7 @@ def test_service_metadata_and_tag_guidance_are_published() -> None:
 
     assert document["info"]["title"] == "AI4Bharat IndicConformer ASR"
     assert "Try a transcription in Swagger" in document["info"]["description"]
+    assert "separately trained and calibrated 22-class model" in document["info"]["description"]
     assert [tag["name"] for tag in document["tags"]] == [
         "transcription",
         "openai",
@@ -24,7 +25,7 @@ def test_service_metadata_and_tag_guidance_are_published() -> None:
     ]
     assert {entry["url"] for entry in document["x-websocket-endpoints"]} == {
         "/v1/realtime",
-        "/v1/realtime/transcription_sessions",
+        "/v1/realtime/native",
     }
 
 

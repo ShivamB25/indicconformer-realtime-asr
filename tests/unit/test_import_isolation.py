@@ -20,7 +20,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # Runtimes that must never be pulled in by importing or serving the application.
-# The official and ORT engines import them inside startup, never at module scope.
+# The official engine imports them inside startup, never at module scope.
 HEAVY_MODULES = (
     "torch",
     "torchaudio",
@@ -161,9 +161,7 @@ class TestEngineModulesAreLazy:
         "module",
         [
             "app.engine.official_engine",
-            "app.engine.ort_engine",
             "app.engine.scheduler",
-            "app.engine.manifest",
             "app.api.websocket",
             "app.core.lifespan",
         ],

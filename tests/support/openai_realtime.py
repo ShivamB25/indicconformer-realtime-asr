@@ -9,7 +9,7 @@ from starlette.testclient import WebSocketTestSession
 
 from tests.support.realtime import RealtimeDriver
 
-OPENAI_TRANSCRIPTION_PATH = "/v1/realtime/transcription_sessions"
+OPENAI_TRANSCRIPTION_PATH = "/v1/realtime"
 
 
 class OpenAIRealtimeDriver(RealtimeDriver):

@@ -16,8 +16,12 @@ from pydantic import BaseModel, ValidationError
 from starlette.websockets import WebSocketState
 
 from app.api.auth import websocket_admitted
+from app.api.realtime import ConnectionRegistry
 from app.core.config import Settings
+from app.core.logging import get_logger
+from app.core.types import ProcessingMode
 from app.engine.base import TranscriptionRequest
+from app.engine.scheduler import ServerBusyError
 from app.openai_compat import MODEL_ID, OpenAIError, validate_model
 from app.openai_compat.realtime import (
     CLIENT_EVENT_ADAPTER,
@@ -43,6 +47,7 @@ from app.openai_compat.realtime import (
 from app.vad.base import VADCapacityError, VADError, VADInferenceError, VADProvider, VADStream
 
 MAX_EVENT = 15 * 1024 * 1024
+_LOGGER = get_logger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +56,7 @@ class OpenAIRealtimeConfig:
     max_session_audio_bytes: int = 50 * 1024 * 1024
     max_session_seconds: float = 3600.0
     idle_timeout_seconds: float = 60.0
+    max_pending_turns: int = 4
 
     def __post_init__(self) -> None:
         if not 1 <= self.max_event_bytes <= MAX_EVENT:
@@ -59,6 +65,8 @@ class OpenAIRealtimeConfig:
             raise ValueError("audio limit is too small")
         if self.max_session_seconds <= 0 or self.idle_timeout_seconds <= 0:
             raise ValueError("timeouts must be positive")
+        if self.max_pending_turns <= 0:
+            raise ValueError("max_pending_turns must be positive")
 
 
 def _id(prefix: str) -> str:
@@ -79,6 +87,19 @@ async def _error(
     param: str | None = None,
     kind: Literal["invalid_request_error", "server_error"] = "invalid_request_error",
 ) -> None:
+    metric_code = {
+        "audio_limit_exceeded": "INVALID_AUDIO",
+        "event_too_large": "FRAME_TOO_LARGE",
+        "idle_timeout": "IDLE_TIMEOUT",
+        "internal_error": "INTERNAL_ERROR",
+        "server_busy": "SERVER_BUSY",
+        "service_unavailable": "SERVICE_UNAVAILABLE",
+        "session_expired": "SESSION_LIMIT",
+        "transcription_failed": "INFERENCE_ERROR",
+        "vad_capacity_exceeded": "SERVER_BUSY",
+        "vad_inference_failed": "INFERENCE_ERROR",
+    }.get(code, "BAD_REQUEST")
+    _record_metric(ws, "record_protocol_failure", metric_code)
     await _send(
         ws,
         lock,
@@ -95,9 +116,28 @@ def _validation(exc: ValidationError) -> str:
     )
 
 
+def _record_metric(ws: WebSocket, method: str, *args: object) -> None:
+    metrics = getattr(ws.app.state, "metrics", None)
+    if metrics is None:
+        return
+    try:
+        getattr(metrics, method)(*args)
+    except Exception as exc:
+        try:
+            metrics.record_telemetry_failure()
+        except Exception:
+            pass
+        _LOGGER.error(
+            "openai_realtime_metrics_failed",
+            metric=method,
+            exception_type=type(exc).__name__,
+        )
+
+
 async def _infer(
     ws: WebSocket, lock: asyncio.Lock, scheduler: Any, session_id: str, turn: TurnSnapshot
 ) -> None:
+    started = time.perf_counter()
     try:
         audio = await asyncio.to_thread(turn.to_engine_audio)
         result = await scheduler.submit_final(
@@ -121,9 +161,39 @@ async def _infer(
                 usage=DurationUsage(seconds=result.audio_duration_ms / 1000),
             ),
         )
+        elapsed = time.perf_counter() - started
+        _record_metric(ws, "record_transcription", turn.language, ProcessingMode.ACCURACY)
+        _record_metric(
+            ws,
+            "record_audio_seconds",
+            turn.language,
+            ProcessingMode.ACCURACY,
+            result.audio_duration_ms / 1_000,
+        )
+        _record_metric(ws, "record_final_latency", turn.language, ProcessingMode.ACCURACY, elapsed)
     except asyncio.CancelledError:
         raise
-    except Exception:
+    except ServerBusyError as exc:
+        _LOGGER.warning("openai_realtime_inference_busy", exception_type=type(exc).__name__)
+        _record_metric(ws, "record_protocol_failure", "SERVER_BUSY")
+        if ws.application_state is WebSocketState.CONNECTED:
+            await _send(
+                ws,
+                lock,
+                TranscriptionFailedEvent(
+                    event_id=_id("event"),
+                    item_id=turn.item_id,
+                    error=ErrorDetail(
+                        type="server_error",
+                        code="server_busy",
+                        message="inference queue is full",
+                        event_id=turn.client_event_id,
+                    ),
+                ),
+            )
+    except Exception as exc:
+        _LOGGER.error("openai_realtime_inference_failed", exception_type=type(exc).__name__)
+        _record_metric(ws, "record_protocol_failure", "INFERENCE_ERROR")
         if ws.application_state is WebSocketState.CONNECTED:
             await _send(
                 ws,
@@ -139,6 +209,15 @@ async def _infer(
                     ),
                 ),
             )
+
+
+async def _wait_for_turn_slot(tasks: set[asyncio.Task[None]], limit: int) -> None:
+    """Backpressure the receive loop before conversion/inference task creation."""
+
+    while len(tasks) >= limit:
+        done, _ = await asyncio.wait(tuple(tasks), return_when=asyncio.FIRST_COMPLETED)
+        tasks.difference_update(done)
+        await asyncio.gather(*done, return_exceptions=True)
 
 
 def _schedule(
@@ -173,6 +252,20 @@ async def _vad_failure(
     raise _VADConnectionClosed
 
 
+async def _reset_vad_stream(
+    ws: WebSocket,
+    lock: asyncio.Lock,
+    stream: VADStream,
+    causal: str | None,
+) -> None:
+    try:
+        stream.reset()
+    except Exception as exc:
+        _LOGGER.error("openai_realtime_vad_reset_failed", exception_type=type(exc).__name__)
+        failure = exc if isinstance(exc, VADError) else VADInferenceError("VAD stream reset failed")
+        await _vad_failure(ws, lock, failure, causal)
+
+
 class _VADConnectionClosed(Exception):
     """The VAD error event and terminal close frame have already been sent."""
 
@@ -186,15 +279,17 @@ async def _commit(
     vad_stream: VADStream | None,
     causal: str | None,
     item_id: str,
+    max_pending_turns: int,
     size: int | None = None,
 ) -> bool:
+    await _wait_for_turn_slot(tasks, max_pending_turns)
     try:
         turn = state.snapshot(item_id=item_id, client_event_id=causal, byte_count=size)
     except ValueError as exc:
         await _error(ws, lock, "invalid_audio_buffer", str(exc), causal, "audio")
         return False
     if vad_stream is not None:
-        vad_stream.reset()
+        await _reset_vad_stream(ws, lock, vad_stream, causal)
     await _send(
         ws,
         lock,
@@ -214,6 +309,7 @@ async def _vad(
     state: RealtimeSessionState,
     vad_stream: VADStream | None,
     causal: str | None,
+    max_pending_turns: int,
 ) -> None:
     config = state.turn_detection
     if config is None:
@@ -235,10 +331,12 @@ async def _vad(
         except VADError as exc:
             await _vad_failure(ws, lock, exc, causal)
         speech = score >= config.threshold
-        ws.app.state.metrics.record_vad_decision(ws.app.state.vad_provider.name, speech)
+        provider_name = getattr(getattr(ws.app.state, "vad_provider", None), "name", "unknown")
+        _record_metric(ws, "record_vad_decision", provider_name, speech)
         if not state.speech_active:
             state.speech_run_frames = state.speech_run_frames + 1 if speech else 0
             if state.speech_run_frames < 3:
+                state.trim_pre_speech(config.prefix_padding_ms)
                 continue
             state.speech_active = True
             state.pending_item_id = _id("item")
@@ -256,7 +354,7 @@ async def _vad(
         if state.silence_run_frames < stop_frames:
             continue
         item = state.pending_item_id or _id("item")
-        ws.app.state.metrics.record_vad_endpoint_event("openai")
+        _record_metric(ws, "record_vad_endpoint_event", "openai")
         await _send(
             ws,
             lock,
@@ -271,10 +369,11 @@ async def _vad(
             vad_stream,
             causal,
             item,
+            max_pending_turns,
             state.vad_scan_bytes,
         ):
             state.reset_vad()
-            vad_stream.reset()
+            await _reset_vad_stream(ws, lock, vad_stream, causal)
             return
 
 
@@ -304,12 +403,19 @@ async def _handle(
     vad_provider: Any,
     vad_stream: VADStream | None,
     event: object,
+    config: OpenAIRealtimeConfig,
 ) -> VADStream | None:
     if isinstance(event, SessionUpdateEvent):
         try:
-            state.apply_update(
-                event.session, validate_model(event.session.audio.input.transcription.model)
-            )
+            audio_patch = event.session.audio
+            input_patch = None if audio_patch is None else audio_patch.input
+            transcription_patch = None if input_patch is None else input_patch.transcription
+            canonical_model = None
+            if transcription_patch is not None and "model" in transcription_patch.model_fields_set:
+                if transcription_patch.model is None:
+                    raise ValueError("transcription model cannot be null")
+                canonical_model = validate_model(transcription_patch.model)
+            state.apply_update(event.session, canonical_model)
         except OpenAIError as exc:
             await _error(
                 ws,
@@ -330,6 +436,14 @@ async def _handle(
             await _vad_failure(ws, lock, exc, event.event_id)
         except VADError as exc:
             await _vad_failure(ws, lock, exc, event.event_id)
+        except Exception as exc:
+            _LOGGER.error(
+                "openai_realtime_vad_configuration_failed",
+                exception_type=type(exc).__name__,
+            )
+            await _vad_failure(
+                ws, lock, VADInferenceError("VAD stream configuration failed"), event.event_id
+            )
         await _send(
             ws, lock, SessionUpdatedEvent(event_id=_id("event"), session=state.session_payload())
         )
@@ -361,12 +475,14 @@ async def _handle(
         except OverflowError as exc:
             await _error(ws, lock, "audio_limit_exceeded", str(exc), event.event_id, "audio")
             return vad_stream
-        await _vad(ws, lock, scheduler, tasks, state, vad_stream, event.event_id)
+        await _vad(
+            ws, lock, scheduler, tasks, state, vad_stream, event.event_id, config.max_pending_turns
+        )
         return vad_stream
     if isinstance(event, AudioClearEvent):
         state.clear()
         if vad_stream is not None:
-            vad_stream.reset()
+            await _reset_vad_stream(ws, lock, vad_stream, event.event_id)
         await _send(ws, lock, AudioClearedEvent(event_id=_id("event")))
         return vad_stream
     assert isinstance(event, AudioCommitEvent)
@@ -381,12 +497,152 @@ async def _handle(
                 item_id=item,
             ),
         )
-    await _commit(ws, lock, scheduler, tasks, state, vad_stream, event.event_id, item)
+    await _commit(
+        ws,
+        lock,
+        scheduler,
+        tasks,
+        state,
+        vad_stream,
+        event.event_id,
+        item,
+        config.max_pending_turns,
+    )
     return vad_stream
 
 
-async def _serve(ws: WebSocket, scheduler: Any, config: OpenAIRealtimeConfig) -> None:
+async def _run_session(
+    ws: WebSocket,
+    lock: asyncio.Lock,
+    scheduler: Any,
+    config: OpenAIRealtimeConfig,
+) -> None:
+    tasks: set[asyncio.Task[None]] = set()
+    vad_stream: VADStream | None = None
+    metric_started = False
+    deadline = float("inf")
+    try:
+        settings: Settings = ws.app.state.settings
+        now = int(time.time())
+        state = RealtimeSessionState(
+            session_id=_id("sess"),
+            expires_at=now + int(config.max_session_seconds),
+            max_audio_bytes=min(settings.max_upload_bytes, config.max_session_audio_bytes),
+            max_audio_seconds=min(settings.max_audio_seconds, config.max_session_seconds),
+            model=MODEL_ID,
+        )
+        vad_provider = getattr(ws.app.state, "vad_provider", None)
+        deadline = asyncio.get_running_loop().time() + config.max_session_seconds
+        _record_metric(ws, "session_started")
+        metric_started = True
+        async with asyncio.timeout_at(deadline):
+            await _send(
+                ws,
+                lock,
+                SessionCreatedEvent(event_id=_id("event"), session=state.session_payload()),
+            )
+            while True:
+                try:
+                    message = await asyncio.wait_for(
+                        ws.receive(), timeout=config.idle_timeout_seconds
+                    )
+                except TimeoutError:
+                    await _error(ws, lock, "idle_timeout", "session was idle for too long", None)
+                    await ws.close(code=1001)
+                    return
+                if message["type"] == "websocket.disconnect":
+                    return
+                text = message.get("text")
+                if text is None:
+                    await _error(ws, lock, "invalid_event", "events must be JSON text frames", None)
+                    continue
+                if len(text.encode()) > config.max_event_bytes:
+                    await _error(
+                        ws, lock, "event_too_large", "event exceeds the 15 MiB limit", None
+                    )
+                    continue
+                try:
+                    payload = json.loads(text)
+                except json.JSONDecodeError:
+                    await _error(ws, lock, "invalid_json", "event must contain valid JSON", None)
+                    continue
+                causal = payload.get("event_id") if isinstance(payload, dict) else None
+                causal = causal if isinstance(causal, str) else None
+                try:
+                    event = CLIENT_EVENT_ADAPTER.validate_python(payload)
+                except ValidationError as exc:
+                    await _error(ws, lock, "invalid_event", _validation(exc), causal)
+                    continue
+                vad_stream = await _handle(
+                    ws,
+                    lock,
+                    scheduler,
+                    tasks,
+                    state,
+                    vad_provider,
+                    vad_stream,
+                    event,
+                    config,
+                )
+    except TimeoutError as exc:
+        if asyncio.get_running_loop().time() >= deadline:
+            await _error(ws, lock, "session_expired", "maximum session duration reached", None)
+            if ws.application_state is WebSocketState.CONNECTED:
+                await ws.close(code=1000)
+            return
+        _LOGGER.error("openai_realtime_session_failed", exception_type=type(exc).__name__)
+        if ws.application_state is WebSocketState.CONNECTED:
+            await _error(
+                ws,
+                lock,
+                "internal_error",
+                "realtime session failed",
+                None,
+                kind="server_error",
+            )
+            await ws.close(code=1011)
+        return
+    except (WebSocketDisconnect, _VADConnectionClosed):
+        return
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        _LOGGER.error("openai_realtime_session_failed", exception_type=type(exc).__name__)
+        if ws.application_state is WebSocketState.CONNECTED:
+            await _error(
+                ws,
+                lock,
+                "internal_error",
+                "realtime session failed",
+                None,
+                kind="server_error",
+            )
+            await ws.close(code=1011)
+    finally:
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        if vad_stream is not None:
+            try:
+                vad_stream.close()
+            except Exception as exc:
+                _LOGGER.error(
+                    "openai_realtime_vad_close_failed",
+                    exception_type=type(exc).__name__,
+                )
+        if metric_started:
+            _record_metric(ws, "session_ended")
+
+
+async def _serve(
+    ws: WebSocket,
+    scheduler: Any,
+    config: OpenAIRealtimeConfig,
+    registry: ConnectionRegistry,
+) -> None:
     if not websocket_admitted(ws):
+        _record_metric(ws, "record_rejection", "INVALID_SESSION")
         await ws.close(code=1008)
         return
     await ws.accept()
@@ -402,64 +658,18 @@ async def _serve(ws: WebSocket, scheduler: Any, config: OpenAIRealtimeConfig) ->
         )
         await ws.close(code=1013)
         return
-    settings: Settings = ws.app.state.settings
-    now = int(time.time())
-    state = RealtimeSessionState(
-        session_id=_id("sess"),
-        expires_at=now + int(config.max_session_seconds),
-        max_audio_bytes=min(settings.max_upload_bytes, config.max_session_audio_bytes),
-        max_audio_seconds=min(settings.max_audio_seconds, config.max_session_seconds),
-        model=MODEL_ID,
-    )
-    tasks: set[asyncio.Task[None]] = set()
-    vad_provider = getattr(ws.app.state, "vad_provider", None)
-    vad_stream: VADStream | None = None
-    started = time.monotonic()
-    await _send(
-        ws, lock, SessionCreatedEvent(event_id=_id("event"), session=state.session_payload())
-    )
-    try:
-        while True:
-            elapsed = time.monotonic() - started
-            try:
-                message = await asyncio.wait_for(
-                    ws.receive(),
-                    timeout=min(config.idle_timeout_seconds, config.max_session_seconds - elapsed),
-                )
-            except TimeoutError:
-                await _error(ws, lock, "idle_timeout", "session was idle for too long", None)
-                await ws.close(code=1001)
-                return
-            if message["type"] == "websocket.disconnect":
-                return
-            text = message.get("text")
-            if text is None:
-                await _error(ws, lock, "invalid_event", "events must be JSON text frames", None)
-                continue
-            if len(text.encode()) > config.max_event_bytes:
-                await _error(ws, lock, "event_too_large", "event exceeds the 15 MiB limit", None)
-                continue
-            try:
-                payload = json.loads(text)
-            except json.JSONDecodeError:
-                await _error(ws, lock, "invalid_json", "event must contain valid JSON", None)
-                continue
-            causal = payload.get("event_id") if isinstance(payload, dict) else None
-            causal = causal if isinstance(causal, str) else None
-            try:
-                event = CLIENT_EVENT_ADAPTER.validate_python(payload)
-            except ValidationError as exc:
-                await _error(ws, lock, "invalid_event", _validation(exc), causal)
-                continue
-            vad_stream = await _handle(
-                ws, lock, scheduler, tasks, state, vad_provider, vad_stream, event
-            )
-    except (TimeoutError, WebSocketDisconnect, _VADConnectionClosed):
+    if not await registry.acquire():
+        await _error(
+            ws,
+            lock,
+            "server_busy",
+            "maximum concurrent realtime sessions reached",
+            None,
+            kind="server_error",
+        )
+        await ws.close(code=1013)
         return
+    try:
+        await _run_session(ws, lock, scheduler, config)
     finally:
-        if vad_stream is not None:
-            vad_stream.close()
-        for task in tasks:
-            task.cancel()
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+        await registry.release()

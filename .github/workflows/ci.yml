@@ -61,7 +61,7 @@ jobs:
           cache-dependency-glob: uv.lock
 
       - name: Sync locked CPU environment
-        run: uv sync --frozen --extra cpu --group dev
+        run: uv sync --frozen --extra official-cpu --group dev
 
       - name: ruff check
         run: uv run ruff check --output-format=github .
@@ -88,7 +88,7 @@ jobs:
           cache-dependency-glob: uv.lock
 
       - name: Sync locked CPU environment
-        run: uv sync --frozen --extra cpu --group dev
+        run: uv sync --frozen --extra official-cpu --group dev
 
       - name: mypy
         run: uv run mypy app tests
@@ -112,10 +112,10 @@ jobs:
           cache-dependency-glob: uv.lock
 
       - name: Sync locked CPU environment
-        run: uv sync --frozen --extra cpu --group dev
+        run: uv sync --frozen --extra official-cpu --group dev
 
-      # The `cpu` and `gpu` extras are mutually exclusive. If a GPU runtime ever
-      # resolves into the CPU job, tests would silently probe for CUDA on a
+      # The `official-cpu` and `official-gpu` extras are mutually exclusive. If a
+      # GPU runtime ever resolves into the CPU job, tests would silently probe CUDA on a
       # machine that has none, so fail loudly instead.
       - name: Guard — no GPU runtime in the CPU environment
         run: |

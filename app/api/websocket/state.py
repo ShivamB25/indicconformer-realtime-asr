@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 
+from app.api.realtime import DEFAULT_CONNECTION_LIMIT
 from app.audio.endpoint import AdaptivePartialCadence, EndpointDetector
 from app.audio.pcm import PCM16_FRAME_BYTES, PCM16Buffer
 from app.audio.stable_prefix import RollingStablePrefix
@@ -15,7 +16,7 @@ from app.vad.base import VADStream
 
 @dataclass(frozen=True, slots=True)
 class WebSocketConfig:
-    max_sessions: int = 128
+    max_sessions: int = DEFAULT_CONNECTION_LIMIT
     max_session_seconds: float = 3_600.0
     max_frame_bytes: int = PCM16_FRAME_BYTES
     max_utterance_ms: int = 30_000
@@ -51,26 +52,6 @@ class WebSocketConfig:
             or max(cadences) > self.partial_maximum_ms
         ):
             raise ValueError("partial cadence bounds are invalid")
-
-
-class _SessionRegistry:
-    """Concurrency guard shared by all connections on one router."""
-
-    def __init__(self, limit: int) -> None:
-        self._active = 0
-        self._limit = limit
-        self._lock = asyncio.Lock()
-
-    async def acquire(self) -> bool:
-        async with self._lock:
-            if self._active >= self._limit:
-                return False
-            self._active += 1
-            return True
-
-    async def release(self) -> None:
-        async with self._lock:
-            self._active = max(0, self._active - 1)
 
 
 @dataclass(slots=True)

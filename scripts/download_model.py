@@ -14,6 +14,14 @@ import tempfile
 from pathlib import Path, PurePosixPath
 from typing import Any, NoReturn
 
+try:
+    from scripts import _atomic_directory as _atomic_directory_impl
+except ModuleNotFoundError:  # Direct execution places scripts/ on sys.path.
+    import _atomic_directory as _atomic_directory_impl  # type: ignore[import-not-found, no-redef]
+
+fsync_directory = _atomic_directory_impl.fsync_directory
+publish_directory = _atomic_directory_impl.publish_directory
+
 LANGUAGES: tuple[str, ...] = (
     "as",
     "bn",
@@ -345,14 +353,6 @@ def _remove_huggingface_metadata(staging: Path) -> None:
             shutil.rmtree(metadata)
 
 
-def _fsync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-
-
 def _fsync_payload_tree(root: Path) -> None:
     """Persist every downloaded payload and directory before publication."""
     for path in _snapshot_files(root).values():
@@ -363,7 +363,7 @@ def _fsync_payload_tree(root: Path) -> None:
             os.close(descriptor)
     directories = [Path(directory) for directory, _, _ in os.walk(root)]
     for directory in reversed(directories):
-        _fsync_directory(directory)
+        fsync_directory(directory)
 
 
 def download_model(destination: Path, repository: str, revision: str, token_file: Path) -> None:
@@ -379,7 +379,6 @@ def download_model(destination: Path, repository: str, revision: str, token_file
         return
 
     staging = Path(tempfile.mkdtemp(prefix=f".{destination.name}.staging-", dir=destination.parent))
-    published = False
     try:
         try:
             from huggingface_hub import snapshot_download
@@ -407,19 +406,15 @@ def download_model(destination: Path, repository: str, revision: str, token_file
         manifest = build_manifest(staging, repository, revision)
         write_completion_metadata(staging, manifest)
         verify_model(staging, repository, revision)
-        _fsync_directory(staging)
-        try:
-            os.rename(staging, destination)
-            published = True
-            _fsync_directory(destination.parent)
-        except OSError:
-            if destination.exists() and not destination.is_symlink():
-                verify_model(destination, repository, revision)
-            else:
-                raise
+        fsync_directory(staging)
+        publish_directory(
+            staging,
+            destination,
+            lambda winner: verify_model(winner, repository, revision),
+        )
     finally:
         token = ""
-        if not published and staging.exists():
+        if staging.exists():
             shutil.rmtree(staging)
 
 

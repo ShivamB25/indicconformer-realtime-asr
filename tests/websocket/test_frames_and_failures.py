@@ -15,6 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api.websocket import WebSocketConfig
+from app.api.websocket import connection as websocket_connection
 from app.audio.pcm import PCM16_FRAME_BYTES, SAMPLES_PER_FRAME
 from app.engine.scheduler import PartialOutstandingError, StalePartialError
 from tests.support.asgi import (
@@ -26,6 +27,15 @@ from tests.support.asgi import (
 )
 from tests.support.audio import silence_frame, speech_frame, speech_frames
 from tests.support.realtime import REALTIME_PATH, RealtimeDriver
+
+
+class _LogSpy:
+    def __init__(self) -> None:
+        self.errors: list[tuple[str, dict[str, object]]] = []
+
+    def error(self, event: str, **fields: object) -> None:
+        self.errors.append((event, fields))
+
 
 # A partial needs one cadence interval of audio; 400 ms is the hybrid default.
 FRAMES_TO_FIRST_PARTIAL = 400 // 20
@@ -159,7 +169,11 @@ class TestFinalInferenceFailures:
                 assert error["retryable"] is True
                 realtime.expect_close(1013)
 
-    def test_an_engine_failure_is_retryable_and_closes_as_an_internal_error(self) -> None:
+    def test_an_engine_failure_is_retryable_and_closes_as_an_internal_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        logger = _LogSpy()
+        monkeypatch.setattr(websocket_connection, "_LOGGER", logger)
         with TestClient(realtime_only_app(failing_scheduler())) as client:
             with client.websocket_connect(REALTIME_PATH) as socket:
                 realtime = RealtimeDriver(socket)
@@ -170,6 +184,8 @@ class TestFinalInferenceFailures:
                 error = realtime.expect_error("INFERENCE_ERROR")
                 assert error["retryable"] is True
                 realtime.expect_close(1011)
+
+        assert logger.errors == [("realtime_final_failed", {"exception_type": "RuntimeError"})]
 
     def test_no_transcript_is_ever_emitted_alongside_a_failure(self) -> None:
         with TestClient(realtime_only_app(failing_scheduler())) as client:
@@ -186,7 +202,11 @@ class TestFinalInferenceFailures:
 
 
 class TestPartialInferenceFailures:
-    def test_a_failing_partial_reports_an_error_but_preserves_the_session(self) -> None:
+    def test_a_failing_partial_reports_an_error_but_preserves_the_session(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        logger = _LogSpy()
+        monkeypatch.setattr(websocket_connection, "_LOGGER", logger)
         scheduler = SchedulerDouble(partial_error=RuntimeError("partial exploded"))
         with TestClient(realtime_only_app(scheduler)) as client:
             with client.websocket_connect(REALTIME_PATH) as socket:
@@ -201,6 +221,7 @@ class TestPartialInferenceFailures:
 
         assert len(scheduler.partials) == 1
         assert len(scheduler.finals) == 1
+        assert logger.errors == [("realtime_partial_failed", {"exception_type": "RuntimeError"})]
 
     def test_a_busy_partial_reports_an_error_but_preserves_the_session(self) -> None:
         scheduler = SchedulerDouble(partial_error=busy_scheduler().partial_error)
@@ -300,6 +321,14 @@ class TestIdleAndDisconnect:
                 error = realtime.expect_error("IDLE_TIMEOUT", timeout=5.0)
                 assert error["retryable"] is False
                 realtime.expect_close(1001)
+
+    def test_the_hard_session_lifetime_is_not_reported_as_idle(self) -> None:
+        config = WebSocketConfig(max_session_seconds=0.05, idle_timeout_seconds=5.0)
+        with TestClient(realtime_only_app(SchedulerDouble(), config)) as client:
+            with client.websocket_connect(REALTIME_PATH) as socket:
+                realtime = RealtimeDriver(socket)
+                realtime.expect_error("SESSION_LIMIT", timeout=2.0)
+                realtime.expect_close(1000)
 
     def test_a_client_disconnect_releases_the_session_slot(self) -> None:
         config = WebSocketConfig(max_sessions=1)

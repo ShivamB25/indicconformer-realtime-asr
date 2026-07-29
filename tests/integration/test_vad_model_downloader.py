@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import shutil
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,7 @@ from urllib.request import Request
 
 import pytest
 
+import scripts._atomic_directory as atomic_directory
 import scripts.download_vad_model as downloader
 from app.vad.artifact import SILERO_VAD_REVISION
 from scripts.download_vad_model import (
@@ -124,6 +126,51 @@ class TestProvisioning:
         verify_vad_model(destination)
         assert (destination / "silero_vad.onnx").read_bytes() == model
         assert (destination / "LICENSE").read_bytes() == license_text
+        assert list(tmp_path.glob(".vad.staging-*")) == []
+
+    def test_parent_fsync_failure_after_rename_is_propagated(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        artifacts: tuple[bytes, bytes],
+    ) -> None:
+        model, license_text = artifacts
+        install_fake_network(monkeypatch, payload_map(model, license_text))
+        destination = tmp_path / "vad"
+
+        def fail_parent_fsync(path: Path) -> None:
+            assert path == tmp_path
+            raise OSError("parent fsync failed")
+
+        monkeypatch.setattr(atomic_directory, "fsync_directory", fail_parent_fsync)
+
+        with pytest.raises(OSError, match="parent fsync failed"):
+            provision_vad_model(destination)
+
+        verify_vad_model(destination)
+        assert list(tmp_path.glob(".vad.staging-*")) == []
+
+    def test_a_genuine_concurrent_winner_is_verified_and_reused(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        artifacts: tuple[bytes, bytes],
+    ) -> None:
+        model, license_text = artifacts
+        install_fake_network(monkeypatch, payload_map(model, license_text))
+        destination = tmp_path / "vad"
+
+        def lose_rename_race(staging: Path, target: Path) -> None:
+            assert target == destination
+            shutil.copytree(staging, target)
+            raise FileExistsError("concurrent winner")
+
+        monkeypatch.setattr(atomic_directory.os, "rename", lose_rename_race)  # type: ignore[attr-defined]
+
+        provision_vad_model(destination)
+
+        verify_vad_model(destination)
+        assert (destination / "silero_vad.onnx").read_bytes() == model
         assert list(tmp_path.glob(".vad.staging-*")) == []
 
     def test_an_existing_valid_directory_is_idempotent_and_never_uses_network(

@@ -7,20 +7,77 @@ until application startup.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from time import perf_counter
 from typing import Any
 
 import anyio
-import numpy as np
 
+from app.core.types import SUPPORTED_LANGUAGES
 from app.engine.base import (
     BaseEngine,
     EngineState,
     ProgressCallback,
     TranscriptionRequest,
     TranscriptionResult,
+    normalize_pcm16_audio,
 )
+
+_REQUIRED_ONNX_SESSIONS = frozenset(
+    {
+        "encoder",
+        "ctc_decoder",
+        "joint_enc",
+        "joint_pred",
+        "joint_pre_net",
+        *(f"joint_post_net_{language}" for language in SUPPORTED_LANGUAGES),
+    }
+)
+_RNNT_SESSION_LAYOUTS = (
+    frozenset({"rnnt_decoder"}),
+    frozenset({"rnnt_decoder_embed", "rnnt_decoder_rnn"}),
+)
+
+
+def _require_strict_cuda_sessions(model: Any) -> None:
+    """Disable runtime fallback and prove every custom-model session is CUDA-primary."""
+
+    custom_models = getattr(model, "models", None)
+    if not isinstance(custom_models, Mapping):
+        raise RuntimeError("official model does not expose its ONNX session registry")
+
+    session_names: set[str] = set()
+    for raw_name, session in custom_models.items():
+        get_providers = getattr(session, "get_providers", None)
+        if not callable(get_providers):
+            continue
+        name = str(raw_name)
+        session_names.add(name)
+        try:
+            providers = tuple(get_providers())
+        except Exception as exc:
+            raise RuntimeError(f"cannot inspect ONNX providers for {name}") from exc
+        if not providers or providers[0] != "CUDAExecutionProvider":
+            raise RuntimeError(
+                f"strict CUDA requires {name} to use CUDAExecutionProvider first; "
+                f"configured providers are {providers!r}"
+            )
+        disable_fallback = getattr(session, "disable_fallback", None)
+        if not callable(disable_fallback):
+            raise RuntimeError(f"strict CUDA cannot disable provider fallback for {name}")
+        try:
+            disable_fallback()
+        except Exception as exc:
+            raise RuntimeError(f"cannot disable provider fallback for {name}") from exc
+
+    missing = _REQUIRED_ONNX_SESSIONS.difference(session_names)
+    if missing:
+        raise RuntimeError(
+            "official model is missing required ONNX sessions: " + ", ".join(sorted(missing))
+        )
+    if not any(layout <= session_names for layout in _RNNT_SESSION_LAYOUTS):
+        raise RuntimeError("official model is missing its RNNT decoder ONNX sessions")
 
 
 class OfficialIndicConformerEngine(BaseEngine):
@@ -85,6 +142,8 @@ class OfficialIndicConformerEngine(BaseEngine):
         )
         config.ts_folder = str(self._model_dir)
         model = AutoModel.from_config(config, trust_remote_code=True)
+        if self._require_cuda:
+            _require_strict_cuda_sessions(model)
         model.to(self._device)
         model.eval()
         self._torch = torch
@@ -107,7 +166,7 @@ class OfficialIndicConformerEngine(BaseEngine):
         if not self.readiness.ready or self._model is None or self._torch is None:
             raise RuntimeError("official engine is not ready")
 
-        audio = np.ascontiguousarray(request.audio, dtype=np.float32)
+        audio = normalize_pcm16_audio(request.audio)
         waveform = self._torch.from_numpy(audio).unsqueeze(0).to(self._device)
         if self._device == "cuda":
             self._torch.cuda.synchronize()

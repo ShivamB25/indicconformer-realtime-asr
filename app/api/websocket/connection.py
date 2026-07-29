@@ -13,7 +13,8 @@ from pydantic import ValidationError
 from starlette.websockets import WebSocketState
 
 from app.api.auth import websocket_admitted
-from app.api.websocket.state import WebSocketConfig, _LiveSession, _SessionRegistry
+from app.api.realtime import ConnectionRegistry
+from app.api.websocket.state import WebSocketConfig, _LiveSession
 from app.audio.endpoint import (
     AdaptivePartialCadence,
     EndpointConfig,
@@ -56,7 +57,7 @@ async def _serve_websocket(
     websocket: WebSocket,
     scheduler: InferenceScheduler | None,
     config: WebSocketConfig,
-    registry: _SessionRegistry,
+    registry: ConnectionRegistry,
 ) -> None:
     if not websocket_admitted(websocket):
         metrics = getattr(websocket.app.state, "metrics", None)
@@ -80,158 +81,177 @@ async def _serve_websocket(
     metrics = getattr(websocket.app.state, "metrics", None)
     send_lock = asyncio.Lock()
     session: _LiveSession | None = None
-    connected_at = time.monotonic()
+    deadline = asyncio.get_running_loop().time() + config.max_session_seconds
     try:
         if metrics is not None:
             metrics.session_started()
-        while True:
-            elapsed = time.monotonic() - connected_at
-            if elapsed >= config.max_session_seconds:
-                await _locked_error(
-                    websocket, send_lock, "SESSION_LIMIT", "maximum session duration reached"
-                )
-                await _close(websocket, 1000)
-                return
-            try:
-                message = await asyncio.wait_for(
-                    websocket.receive(),
-                    timeout=min(config.idle_timeout_seconds, config.max_session_seconds - elapsed),
-                )
-            except TimeoutError:
-                await _locked_error(
-                    websocket, send_lock, "IDLE_TIMEOUT", "session was idle for too long"
-                )
-                await _close(websocket, 1001)
-                return
-            if message["type"] == "websocket.disconnect":
-                return
+        async with asyncio.timeout_at(deadline):
+            while True:
+                try:
+                    message = await asyncio.wait_for(
+                        websocket.receive(),
+                        timeout=config.idle_timeout_seconds,
+                    )
+                except TimeoutError:
+                    await _locked_error(
+                        websocket, send_lock, "IDLE_TIMEOUT", "session was idle for too long"
+                    )
+                    await _close(websocket, 1001)
+                    return
+                if message["type"] == "websocket.disconnect":
+                    return
 
-            binary, text = message.get("bytes"), message.get("text")
-            if binary is not None:
+                binary, text = message.get("bytes"), message.get("text")
+                if binary is not None:
+                    if session is None:
+                        await _protocol_failure(
+                            websocket,
+                            send_lock,
+                            "SESSION_REQUIRED",
+                            "session.start must be the first event",
+                        )
+                        return
+                    if len(binary) > config.max_frame_bytes:
+                        await _protocol_failure(
+                            websocket,
+                            send_lock,
+                            "FRAME_TOO_LARGE",
+                            "binary frame exceeds the configured limit",
+                            close_code=1009,
+                        )
+                        return
+                    if len(binary) != PCM16_FRAME_BYTES:
+                        await _protocol_failure(
+                            websocket,
+                            send_lock,
+                            "INVALID_FRAME_SIZE",
+                            f"binary frames must contain exactly {PCM16_FRAME_BYTES} bytes",
+                        )
+                        return
+                    if not await _handle_audio_frame(
+                        websocket, send_lock, scheduler, session, binary
+                    ):
+                        return
+                    continue
+                if text is None:
+                    await _protocol_failure(
+                        websocket,
+                        send_lock,
+                        "MALFORMED_EVENT",
+                        "websocket event must contain text or binary data",
+                    )
+                    return
+                payload = _parse_json_object(text)
+                if payload is None:
+                    await _protocol_failure(
+                        websocket,
+                        send_lock,
+                        "MALFORMED_EVENT",
+                        "text events must be valid JSON objects",
+                    )
+                    return
+
                 if session is None:
-                    await _protocol_failure(
-                        websocket,
-                        send_lock,
-                        "SESSION_REQUIRED",
-                        "session.start must be the first event",
+                    if payload.get("type") != "session.start":
+                        await _protocol_failure(
+                            websocket,
+                            send_lock,
+                            "SESSION_REQUIRED",
+                            "session.start must be the first event",
+                        )
+                        return
+                    try:
+                        start = SessionStartEvent.model_validate_json(text)
+                    except ValidationError:
+                        await _protocol_failure(
+                            websocket,
+                            send_lock,
+                            "INVALID_SESSION",
+                            "session.start contains invalid or unsupported fields",
+                        )
+                        return
+                    provider = (
+                        getattr(websocket.app.state, "vad_provider", None) if start.vad else None
                     )
-                    return
-                if len(binary) > config.max_frame_bytes:
+                    try:
+                        session = _new_session(start, config, provider)
+                    except VADCapacityError:
+                        await _locked_error(
+                            websocket,
+                            send_lock,
+                            "SERVER_BUSY",
+                            "voice activity detection capacity is exhausted",
+                            retryable=True,
+                        )
+                        await _close(websocket, 1013)
+                        return
+                    except (VADInferenceError, VADClosedError):
+                        await _locked_error(
+                            websocket,
+                            send_lock,
+                            "INFERENCE_ERROR",
+                            "voice activity detection is unavailable",
+                            retryable=True,
+                        )
+                        await _close(websocket, 1011)
+                        return
+                    async with send_lock:
+                        await websocket.send_json(
+                            SessionReadyEvent(session_id=session.session_id).model_dump(mode="json")
+                        )
+                    continue
+                if payload.get("type") == "session.start":
                     await _protocol_failure(
                         websocket,
                         send_lock,
-                        "FRAME_TOO_LARGE",
-                        "binary frame exceeds the configured limit",
-                        close_code=1009,
-                    )
-                    return
-                if len(binary) != PCM16_FRAME_BYTES:
-                    await _protocol_failure(
-                        websocket,
-                        send_lock,
-                        "INVALID_FRAME_SIZE",
-                        f"binary frames must contain exactly {PCM16_FRAME_BYTES} bytes",
-                    )
-                    return
-                if not await _handle_audio_frame(websocket, send_lock, scheduler, session, binary):
-                    return
-                continue
-            if text is None:
-                await _protocol_failure(
-                    websocket,
-                    send_lock,
-                    "MALFORMED_EVENT",
-                    "websocket event must contain text or binary data",
-                )
-                return
-            payload = _parse_json_object(text)
-            if payload is None:
-                await _protocol_failure(
-                    websocket,
-                    send_lock,
-                    "MALFORMED_EVENT",
-                    "text events must be valid JSON objects",
-                )
-                return
-
-            if session is None:
-                if payload.get("type") != "session.start":
-                    await _protocol_failure(
-                        websocket,
-                        send_lock,
-                        "SESSION_REQUIRED",
-                        "session.start must be the first event",
+                        "SESSION_ALREADY_STARTED",
+                        "session.start can only be sent once",
                     )
                     return
                 try:
-                    start = SessionStartEvent.model_validate_json(text)
+                    InputCommitEvent.model_validate_json(text)
                 except ValidationError:
                     await _protocol_failure(
                         websocket,
                         send_lock,
-                        "INVALID_SESSION",
-                        "session.start contains invalid or unsupported fields",
+                        "UNKNOWN_EVENT",
+                        "only input.commit is valid after session.start",
                     )
                     return
-                provider = getattr(websocket.app.state, "vad_provider", None) if start.vad else None
-                try:
-                    session = _new_session(start, config, provider)
-                except VADCapacityError:
+                if session.buffer.empty:
                     await _locked_error(
                         websocket,
                         send_lock,
-                        "SERVER_BUSY",
-                        "voice activity detection capacity is exhausted",
-                        retryable=True,
+                        "EMPTY_UTTERANCE",
+                        "input.commit requires buffered audio",
                     )
-                    await _close(websocket, 1013)
+                    continue
+                session.endpoint.commit()
+                if not await _finalize(websocket, send_lock, scheduler, session):
                     return
-                except (VADInferenceError, VADClosedError):
-                    await _locked_error(
-                        websocket,
-                        send_lock,
-                        "INFERENCE_ERROR",
-                        "voice activity detection is unavailable",
-                        retryable=True,
-                    )
-                    await _close(websocket, 1011)
-                    return
-                async with send_lock:
-                    await websocket.send_json(
-                        SessionReadyEvent(session_id=session.session_id).model_dump(mode="json")
-                    )
-                continue
-            if payload.get("type") == "session.start":
-                await _protocol_failure(
-                    websocket,
-                    send_lock,
-                    "SESSION_ALREADY_STARTED",
-                    "session.start can only be sent once",
-                )
-                return
-            try:
-                InputCommitEvent.model_validate_json(text)
-            except ValidationError:
-                await _protocol_failure(
-                    websocket,
-                    send_lock,
-                    "UNKNOWN_EVENT",
-                    "only input.commit is valid after session.start",
-                )
-                return
-            if session.buffer.empty:
-                await _locked_error(
-                    websocket, send_lock, "EMPTY_UTTERANCE", "input.commit requires buffered audio"
-                )
-                continue
-            session.endpoint.commit()
-            if not await _finalize(websocket, send_lock, scheduler, session):
-                return
+    except TimeoutError as exc:
+        if asyncio.get_running_loop().time() < deadline:
+            _LOGGER.error("realtime_session_failed", exception_type=type(exc).__name__)
+            await _locked_error(
+                websocket,
+                send_lock,
+                "INTERNAL_ERROR",
+                "realtime session failed",
+                retryable=True,
+            )
+            await _close(websocket, 1011)
+            return
+        await _locked_error(
+            websocket, send_lock, "SESSION_LIMIT", "maximum session duration reached"
+        )
+        await _close(websocket, 1000)
+        return
     except WebSocketDisconnect:
         return
     except asyncio.CancelledError:
         raise
-    except Exception:
+    except Exception as exc:
+        _LOGGER.error("realtime_session_failed", exception_type=type(exc).__name__)
         if websocket.client_state is not WebSocketState.DISCONNECTED:
             await _locked_error(
                 websocket, send_lock, "INTERNAL_ERROR", "realtime session failed", retryable=True
@@ -239,13 +259,16 @@ async def _serve_websocket(
             await _close(websocket, 1011)
     finally:
         if session is not None:
-            if session.partial_task is not None:
-                session.partial_task.cancel()
+            partial_task = session.partial_task
+            if partial_task is not None:
+                partial_task.cancel()
             if session.vad is not None:
                 try:
                     session.vad.close()
-                except Exception:
-                    _LOGGER.exception("realtime_vad_close_failed", session_id=session.session_id)
+                except Exception as exc:
+                    _LOGGER.error("realtime_vad_close_failed", exception_type=type(exc).__name__)
+            if partial_task is not None:
+                await asyncio.gather(partial_task, return_exceptions=True)
         # Release the bounded slot before optional bookkeeping: a metrics backend that
         # raises must not permanently shrink session capacity.
         await registry.release()
@@ -259,12 +282,16 @@ def _record_vad_metric(websocket: WebSocket, method: str, *args: object) -> None
         return
     try:
         getattr(metrics, method)(*args)
-    except Exception:
-        _LOGGER.exception("realtime_vad_metrics_failed", metric=method)
+    except Exception as exc:
+        _LOGGER.error(
+            "realtime_vad_metrics_failed", metric=method, exception_type=type(exc).__name__
+        )
         try:
             metrics.record_telemetry_failure()
-        except Exception:
-            _LOGGER.exception("realtime_metrics_failure_counter_failed")
+        except Exception as exc:
+            _LOGGER.error(
+                "realtime_metrics_failure_counter_failed", exception_type=type(exc).__name__
+            )
 
 
 def _new_session(
@@ -434,7 +461,8 @@ async def _emit_partial(
             websocket, send_lock, "SERVER_BUSY", "inference queue is full", retryable=True
         )
         return
-    except Exception:
+    except Exception as exc:
+        _LOGGER.error("realtime_partial_failed", exception_type=type(exc).__name__)
         session.cadence.observe(False, audio_ms)
         await _locked_error(
             websocket, send_lock, "INFERENCE_ERROR", "partial transcription failed", retryable=True
@@ -472,9 +500,9 @@ async def _emit_partial(
             try:
                 metrics.record_queue_wait(mode, queue_wait)
                 metrics.record_partial_latency(session.start.language, mode, elapsed_seconds)
-            except Exception:
+            except Exception as exc:
                 metrics.record_telemetry_failure()
-                _LOGGER.exception("realtime_metrics_failed", session_id=session.session_id)
+                _LOGGER.error("realtime_metrics_failed", exception_type=type(exc).__name__)
 
 
 async def _finalize(
@@ -494,7 +522,19 @@ async def _finalize(
     session.buffer.clear()
     session.endpoint.reset()
     if session.vad is not None:
-        session.vad.reset()
+        try:
+            session.vad.reset()
+        except Exception as exc:
+            _LOGGER.error("realtime_vad_reset_failed", exception_type=type(exc).__name__)
+            await _locked_error(
+                websocket,
+                send_lock,
+                "INFERENCE_ERROR",
+                "voice activity detection failed",
+                retryable=True,
+            )
+            await _close(websocket, 1011)
+            return False
     try:
         result = await scheduler.submit_final(session.session_id, request)
     except ServerBusyError:
@@ -503,7 +543,8 @@ async def _finalize(
         )
         await _close(websocket, 1013)
         return False
-    except Exception:
+    except Exception as exc:
+        _LOGGER.error("realtime_final_failed", exception_type=type(exc).__name__)
         await _locked_error(
             websocket, send_lock, "INFERENCE_ERROR", "final transcription failed", retryable=True
         )
@@ -547,9 +588,9 @@ async def _finalize(
                 metrics.record_final_latency(language, mode, elapsed_seconds)
                 if audio_seconds > 0:
                     metrics.record_realtime_factor(language, mode, elapsed_seconds / audio_seconds)
-            except Exception:
+            except Exception as exc:
                 metrics.record_telemetry_failure()
-                _LOGGER.exception("realtime_metrics_failed", session_id=session.session_id)
+                _LOGGER.error("realtime_metrics_failed", exception_type=type(exc).__name__)
     return True
 
 
