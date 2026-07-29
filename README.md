@@ -441,6 +441,38 @@ uv run python scripts/verify_model.py \
 The inference service never downloads a model on the request path. It loads only
 the completed local snapshot with Hub and Transformers offline mode enabled.
 
+### Published Docker image matrix
+
+The public Docker Hub repository exposes four explicit Linux/amd64 variants:
+
+| Tag | Source | Runtime/VAD | OCI manifest digest |
+| --- | --- | --- | --- |
+| `cpu-no-vad` | `main` | CPU; no VAD package | `sha256:a233f24cc31fd94d080d99f3919ee18753d1db0b469946637538bf0cf6574918` |
+| `gpu-no-vad` | `main` | CUDA/TensorRT; no VAD package | `sha256:05470881ea523bc8d07f73b48eb560b33ee1ae31785b003f9707f39489db9093` |
+| `cpu-vad` | VAD branch | CPU; Silero/WebRTC/Energy | `sha256:b18112ffffa6a2035b90d77dac0864813fc2e434d4ba5fa3f3420764cfdb057d` |
+| `gpu-vad` | VAD branch | CUDA/TensorRT; CPU Silero/WebRTC/Energy | `sha256:727d3bc4791a6c06ad06c71d133eeffe5ec13ff16060e70bb5bc2e78a47243f0` |
+
+All four tags are public and contain application dependencies only; ASR and
+Silero model weights remain external mounts. Pin deployments by the published
+digest rather than relying on a mutable tag. CPU variants default to
+`ASR_REQUIRE_CUDA=false` and are intended for CPU execution and validation.
+
+The VAD branch Dockerfile builds either accelerator dependency set:
+
+```bash
+# GPU + VAD (the default)
+docker build -f deploy/Dockerfile \
+  --build-arg UV_EXTRA=gpu \
+  -t shivam250/indicconformer-realtime-asr:gpu-vad .
+
+# CPU + VAD
+docker build -f deploy/Dockerfile \
+  --build-arg RUNTIME_IMAGE=ubuntu:22.04@sha256:0e0a0fc6d18feda9db1590da249ac93e8d5abfea8f4c3c0c849ce512b5ef8982 \
+  --build-arg UV_EXTRA=cpu \
+  --build-arg ASR_REQUIRE_CUDA=false \
+  -t shivam250/indicconformer-realtime-asr:cpu-vad .
+```
+
 ### Compose deployment
 
 Prerequisites:
@@ -450,7 +482,7 @@ Prerequisites:
 - One GPU per ASR process.
 - A valid Hugging Face token file for the gated checkpoint.
 - An independent 32+ character API key file.
-- A private GHCR `read:packages` credential if the serving image remains private.
+- No registry credential is required for the public Docker Hub images.
 
 Create untracked local files:
 
@@ -464,7 +496,7 @@ chmod 600 .secrets/huggingface_token .secrets/api_key
 Create `.env`:
 
 ```dotenv
-ASR_IMAGE=ghcr.io/shivamb25/indicconformer-realtime-asr@sha256:<64-hex-image-digest>
+ASR_IMAGE=shivam250/indicconformer-realtime-asr:gpu-vad@sha256:727d3bc4791a6c06ad06c71d133eeffe5ec13ff16060e70bb5bc2e78a47243f0
 ASR_MODEL_REVISION=<40-hex-model-commit>
 HF_TOKEN_FILE=/absolute/path/to/.secrets/huggingface_token
 ASR_API_KEY_TOKEN_FILE=/absolute/path/to/.secrets/api_key
@@ -473,11 +505,9 @@ ASR_LISTEN_ADDRESS=127.0.0.1
 ASR_HOST_PORT=8000
 ```
 
-Authenticate to a private package, validate the rendered deployment, pull, then
-start it:
+Validate the rendered deployment, pull the public image, then start it:
 
 ```bash
-echo "$GHCR_READ_TOKEN" | docker login ghcr.io --username <github-user> --password-stdin
 docker compose -f deploy/compose.yaml config --quiet
 docker compose -f deploy/compose.yaml pull
 docker compose -f deploy/compose.yaml up --no-build
@@ -595,9 +625,8 @@ prove recognition accuracy because the test engine is intentionally synthetic.
 - Real IndicConformer transcription quality, WER/CER, throughput, or latency.
 - Model download on this host: unauthenticated access to the gated model returns
   `401` by design.
-- Pulling the private GHCR image on this host: the current GitHub credential
-  lacks `read:packages` and receives `403`. The successful local Docker image
-  smoke test used the locally built image.
+- Anonymous Docker Registry requests returned `200` for all four public tags;
+  their published OCI manifest digests are listed in the image matrix above.
 
 ## Next steps
 

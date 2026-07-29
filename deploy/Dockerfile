@@ -1,14 +1,32 @@
 # syntax=docker/dockerfile:1.7
 
 ARG CUDA_IMAGE=nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04@sha256:2fcc4280646484290cc50dce5e65f388dd04352b07cbe89a635703bd1f9aedb6
-FROM ${CUDA_IMAGE}
+ARG CPU_IMAGE=ubuntu:22.04@sha256:0e0a0fc6d18feda9db1590da249ac93e8d5abfea8f4c3c0c849ce512b5ef8982
+ARG RUNTIME_IMAGE=${CUDA_IMAGE}
+ARG UV_EXTRA=gpu
+ARG ASR_REQUIRE_CUDA=true
+ARG IMAGE_VAD=enabled
+ARG ASR_VAD_PROVIDER=silero
+ARG ASR_VAD_MODEL_PATH=/models/vad/silero-v6.2.1/silero_vad.onnx
+ARG ASR_VAD_MODEL_SHA256=1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3
+FROM ${RUNTIME_IMAGE}
 
-ARG CUDA_IMAGE
+ARG RUNTIME_IMAGE
+ARG UV_EXTRA
+ARG ASR_REQUIRE_CUDA
+ARG IMAGE_VAD
+ARG ASR_VAD_PROVIDER
+ARG ASR_VAD_MODEL_PATH
+ARG ASR_VAD_MODEL_SHA256
 COPY --from=ghcr.io/astral-sh/uv:0.11.33@sha256:77280f2f771df71f90786c314fe1bbc1e023feac652969bbf139c280babf2eb7 /uv /uvx /usr/local/bin/
 
-RUN case "${CUDA_IMAGE}" in \
+RUN case "${RUNTIME_IMAGE}" in \
       *@sha256:*) ;; \
-      *) echo >&2 "CUDA_IMAGE must be pinned by digest"; exit 64 ;; \
+      *) echo >&2 "RUNTIME_IMAGE must be pinned by digest"; exit 64 ;; \
+    esac \
+    && case "${UV_EXTRA}" in \
+      cpu|gpu) ;; \
+      *) echo >&2 "UV_EXTRA must be cpu or gpu"; exit 64 ;; \
     esac \
     && apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends ca-certificates libgomp1 libsndfile1 tini \
@@ -30,17 +48,22 @@ ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python \
     ASR_HOST=0.0.0.0 \
     ASR_PORT=8000 \
     ASR_OFFLINE=true \
-    ASR_REQUIRE_CUDA=true \
+    ASR_REQUIRE_CUDA=${ASR_REQUIRE_CUDA} \
     ASR_ENGINE=ort \
-    ASR_VAD_PROVIDER=silero \
-    ASR_VAD_MODEL_PATH=/models/vad/silero-v6.2.1/silero_vad.onnx \
-    ASR_VAD_MODEL_SHA256=1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3
+    ASR_VAD_PROVIDER=${ASR_VAD_PROVIDER} \
+    ASR_VAD_MODEL_PATH=${ASR_VAD_MODEL_PATH} \
+    ASR_VAD_MODEL_SHA256=${ASR_VAD_MODEL_SHA256}
+
+LABEL org.opencontainers.image.title="indicconformer-realtime-asr" \
+      org.opencontainers.image.description="AI4Bharat IndicConformer ASR service; model weights mounted at runtime" \
+      io.github.shivamb25.indicconformer.accelerator="${UV_EXTRA}" \
+      io.github.shivamb25.indicconformer.vad="${IMAGE_VAD}"
 
 WORKDIR /app
 RUN uv python install 3.11
 
 COPY pyproject.toml uv.lock .python-version ./
-RUN uv sync --frozen --no-dev --extra gpu --no-install-project
+RUN uv sync --frozen --no-dev --extra "${UV_EXTRA}" --no-install-project
 
 COPY --chown=asr:asr app/ ./app/
 COPY --chown=asr:asr scripts/ ./scripts/
