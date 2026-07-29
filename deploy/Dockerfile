@@ -65,9 +65,20 @@ RUN for value in \
       "deb [check-valid-until=no signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] ${APT_SNAPSHOT_URL} jammy-updates main restricted universe multiverse" \
       "deb [check-valid-until=no signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] ${APT_SNAPSHOT_URL} jammy-security main restricted universe multiverse" \
       > /etc/apt/sources.list \
+    # Ubuntu's minimal base has no CA bundle. Bootstrap the pinned CA package
+    # through APT's signed index/package hashes, then discard those indexes and
+    # require normal TLS verification for every remaining package.
+    && apt-get \
+      -o Acquire::Check-Valid-Until=false \
+      -o Acquire::https::Verify-Peer=false \
+      update \
+    && DEBIAN_FRONTEND=noninteractive apt-get \
+      -o Acquire::https::Verify-Peer=false \
+      install --yes --no-install-recommends \
+      "ca-certificates=${APT_CA_CERTIFICATES_VERSION}" \
+    && rm -rf /var/lib/apt/lists/* \
     && apt-get -o Acquire::Check-Valid-Until=false update \
     && DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
-      "ca-certificates=${APT_CA_CERTIFICATES_VERSION}" \
       "libgomp1=${APT_LIBGOMP1_VERSION}" \
       "libsndfile1=${APT_LIBSNDFILE1_VERSION}" \
       "tini=${APT_TINI_VERSION}" \
