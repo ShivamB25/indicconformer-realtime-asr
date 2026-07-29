@@ -349,6 +349,7 @@ dependencies = [
     { name = "soxr" },
     { name = "structlog" },
     { name = "uvicorn", extra = ["standard"] },
+    { name = "webrtcvad-wheels" },
 ]
 
 [package.optional-dependencies]
@@ -397,6 +398,7 @@ requires-dist = [
     { name = "torchaudio", marker = "extra == 'official-gpu'", specifier = "==2.5.1", index = "https://download.pytorch.org/whl/cu124" },
     { name = "transformers", marker = "extra == 'official-gpu'", specifier = ">=4.46.0,<5" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30.0,<1" },
+    { name = "webrtcvad-wheels", specifier = "==2.0.14" },
 ]
 provides-extras = ["cpu", "gpu", "official-gpu"]
 
@@ -1447,6 +1449,26 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/27/0b/a54103cfd732bb703c7a749222011a0483ef3705948dae3b203158601119/watchfiles-1.2.0-pp311-pypy311_pp73-macosx_11_0_arm64.whl", hash = "sha256:094b9b70103d4e963499bdea001ee3c2697b144cd9ae6218a62c0f89ec9e31db", size = 396629, upload-time = "2026-05-18T04:32:03.268Z" },
     { url = "https://files.pythonhosted.org/packages/5e/2c/73f31a3b893886206c3f54d73e8ad8dee58cdb2f69ad2622e0a8a9e07f4e/watchfiles-1.2.0-pp311-pypy311_pp73-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:b0ef001f8c25ad0fa9529f914c1600647ecd0f542d11c19b7894768c67b6acb7", size = 457318, upload-time = "2026-05-18T04:31:01.932Z" },
     { url = "https://files.pythonhosted.org/packages/e9/f9/45d021e4a5cc7b9dd567f7cbb06d3b75f751a690063fb6cc7ec60f4e46b7/watchfiles-1.2.0-pp311-pypy311_pp73-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:a88fc94e647bc4eec523f1caa540258eb71d14278b9daf72fa1e2658a98df0f0", size = 457771, upload-time = "2026-05-18T04:30:56.331Z" },
+]
+
+[[package]]
+name = "webrtcvad-wheels"
+version = "2.0.14"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/28/ba/3a8ce2cff3eee72a39ed190e5f9dac792da1526909c97a11589590b21739/webrtcvad_wheels-2.0.14.tar.gz", hash = "sha256:5f59c8e291c6ef102d9f39532982fbf26a52ce2de6328382e2654b0960fea397", size = 70607, upload-time = "2024-09-05T10:17:02.471Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f6/a3/d17061911034aa38c10bd9143f21396b4e74448013c9049e94e445805c96/webrtcvad_wheels-2.0.14-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:e17f5b273523ae9de28117078107e4a2cee1b521d99d5fd2a88622277d7fa06f", size = 31004, upload-time = "2024-09-05T10:14:55.783Z" },
+    { url = "https://files.pythonhosted.org/packages/f3/87/bff850cb6f0a875f32a7ff544416738cabe028a483a8e54056e9a70f9cd0/webrtcvad_wheels-2.0.14-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:f1f6e6cb99e58f65d9a357fef0703263cf2eb5fa4d63333fff2aba73e2ad3947", size = 29497, upload-time = "2024-09-05T10:14:56.729Z" },
+    { url = "https://files.pythonhosted.org/packages/2e/ef/fe3e6214c9bbaa852c41fd3a11dc0c3465d621f0639322ffbd26bff835e8/webrtcvad_wheels-2.0.14-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:b4003139f180b8e4930b862d662dc574602e4547c8fb497bc48579b7cacc4110", size = 86295, upload-time = "2024-09-05T10:14:57.997Z" },
+    { url = "https://files.pythonhosted.org/packages/a5/95/4669dec6466c6c4a8720a9d66b7839d3d386be534add7a59d8cf205d8eb8/webrtcvad_wheels-2.0.14-cp311-cp311-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:af2656e2e344abaad2fab8f4441a1ef850643bd7de15c2df54ca6c9fa92961f5", size = 95763, upload-time = "2024-09-05T10:14:59.378Z" },
+    { url = "https://files.pythonhosted.org/packages/53/ba/4693ee3610c363505d355265804d39aa46c4acfbc7f6db6bab4bd6236418/webrtcvad_wheels-2.0.14-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:42cbef958b145573fb425482dbbd74fc080540a510c3871e1cebd59afa83c87f", size = 83082, upload-time = "2024-09-05T10:15:00.543Z" },
+    { url = "https://files.pythonhosted.org/packages/c3/10/c6d8335b1063e962ff6cbefb06b602627eb1b4f30d890611638c6c575665/webrtcvad_wheels-2.0.14-cp311-cp311-manylinux_2_5_i686.manylinux1_i686.manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:bce6be5aef9512dbbaccbf16df2793c9e1a3b538c8cebb05976cf4e44bd3381f", size = 80983, upload-time = "2024-09-05T10:15:01.381Z" },
+    { url = "https://files.pythonhosted.org/packages/60/2a/97c9e5681ac0d47430c5bd280aaa7be63431cff1c620c489771734491cbd/webrtcvad_wheels-2.0.14-cp311-cp311-musllinux_1_2_aarch64.whl", hash = "sha256:32409315eaaec46ea58fb7e729193c66573d95124208efd03f332bc2fc4c6c7b", size = 86496, upload-time = "2024-09-05T10:15:02.242Z" },
+    { url = "https://files.pythonhosted.org/packages/9f/8b/56863c61df31cd33af62f1a795c6afca73acb3fb93eb377908a1da991f72/webrtcvad_wheels-2.0.14-cp311-cp311-musllinux_1_2_i686.whl", hash = "sha256:aa8e901c1cdc4344a62a09745b2b3cdf34617801efc49d433fdbc238193efc9c", size = 82668, upload-time = "2024-09-05T10:15:03.473Z" },
+    { url = "https://files.pythonhosted.org/packages/68/ec/95c48ec2dce1bea0cffdfb03055d2e0f958e2ea2e5754c35bc144c882df4/webrtcvad_wheels-2.0.14-cp311-cp311-musllinux_1_2_ppc64le.whl", hash = "sha256:e739720c6b5bb0a21629f3a43563d8afe1de1b40d0ca07a39bc70f0584e05cc8", size = 93642, upload-time = "2024-09-05T10:15:04.77Z" },
+    { url = "https://files.pythonhosted.org/packages/59/ca/ceb1e26f1dcddbe238ae0f769200073572ce61fe2f848476273253748004/webrtcvad_wheels-2.0.14-cp311-cp311-musllinux_1_2_x86_64.whl", hash = "sha256:04e47b87bf673098f25e2c2e07e486b58a339a93231ee0021a86a92b3b759b89", size = 87014, upload-time = "2024-09-05T10:15:05.87Z" },
+    { url = "https://files.pythonhosted.org/packages/62/50/9677355cbb2a9a32c1be3e3fee8c393d5f7f370943914ed9a27c58538a1f/webrtcvad_wheels-2.0.14-cp311-cp311-win32.whl", hash = "sha256:4838e120cbd2e76bd47abc338c3121e8dea7653ae19650ce4f9c40b9bf84bc19", size = 17369, upload-time = "2024-09-05T10:15:06.707Z" },
+    { url = "https://files.pythonhosted.org/packages/80/bd/4309d83120812d04af99aa21a976a4bb8cc10e39f709232c0180bd4e0146/webrtcvad_wheels-2.0.14-cp311-cp311-win_amd64.whl", hash = "sha256:0d9ad6ef4ef7c89228469df52a4657886055a9f1ab036ede09400e2279ac5c70", size = 19901, upload-time = "2024-09-05T10:15:07.562Z" },
 ]
 
 [[package]]

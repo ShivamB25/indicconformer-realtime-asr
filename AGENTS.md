@@ -12,6 +12,16 @@
   trustworthy automatic language detection.
 - Keep decoder policy server-owned: CTC for partial/latency work and RNNT for
   hybrid/accuracy finals.
+- Keep VAD provider-neutral: process-owned `VADProvider`, one connection-owned
+  `VADStream`, and exactly one 20 ms PCM16LE frame per `score` call. Stream
+  state must never cross connections.
+- Keep thresholds and endpoint state in the transport. Providers return finite
+  scores in `[0, 1]`; they do not commit audio or emit protocol events.
+- Preserve every sample through stateful framing/resampling. Do not zero-pad,
+  drop, reorder, or synthesize transport frames to satisfy a model window.
+- A session may never switch VAD algorithms after a provider failure. Map
+  capacity to existing retryable overload behavior and inference/runtime
+  faults to the protocol's server-error close path.
 
 ## Module boundaries
 
@@ -45,6 +55,18 @@
   synchronize all extras.
 - The optional `official-gpu` Transformers wrapper is not part of the lean ORT
   production image.
+- Production VAD must be `silero` or `webrtc`; `energy` is an explicit
+  development/rollback implementation and must continue to fail validation in
+  production.
+- Keep the Silero revision, URL, model SHA-256, and downloader identity in
+  `app/vad/artifact.py`. Runtime code and provisioning must import that single
+  definition. Never bake VAD weights into the image or fetch them at startup.
+- Silero must use CPU ONNX Runtime with explicit thread counts and per-stream
+  recurrent/context/resampler state. WebRTC must keep one classifier and
+  resampler per stream. Both share only bounded process-owned dispatch.
+- VAD metrics must use the closed provider/protocol/result/error label sets.
+  Never add session IDs, audio, transcript content, exception text, paths, or
+  user-controlled strings as metric labels.
 
 ## Change verification
 
@@ -60,3 +82,12 @@
   `uv run mypy app tests`, and `uv run pytest -q` before release.
 - CUDA provider selection, no-CPU-fallback, warmup, model quality, and latency
   claims require the protected GPU workflow on an actual NVIDIA runner.
+- VAD changes require contract coverage at 16 kHz and 24 kHz, exact-frame
+  fragmentation, stream isolation/release, reset/final/disconnect paths,
+  threshold boundaries, capacity/deadline/inference failures, and native plus
+  OpenAI event ordering.
+- Run `uv run python scripts/benchmark_vad.py --self-check` for pipeline smoke.
+  Provider-quality claims require the same pinned labeled multilingual/noisy
+  corpus for Silero, WebRTC modes 0–3, and Energy; report the manifest hash and
+  all metrics emitted by the benchmark. Never treat the synthetic self-check as
+  accuracy evidence.

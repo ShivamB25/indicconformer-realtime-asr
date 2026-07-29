@@ -8,7 +8,8 @@ inference stays deterministic.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -21,6 +22,8 @@ from app.engine.base import Engine, TranscriptionRequest, TranscriptionResult
 from app.engine.mock import MockEngine
 from app.engine.scheduler import ServerBusyError
 from app.main import create_app
+from app.vad.base import VADProvider
+from app.vad.energy import EnergyVADProvider
 
 TEST_SETTINGS_DEFAULTS: dict[str, Any] = {"environment": "test", "require_cuda": False}
 
@@ -31,31 +34,58 @@ def settings_for_tests(**overrides: Any) -> Settings:
     return Settings(**{**TEST_SETTINGS_DEFAULTS, **overrides})
 
 
-def mock_engine_app(engine: Engine | None = None, **settings_overrides: Any) -> FastAPI:
+def mock_engine_app(
+    engine: Engine | None = None,
+    *,
+    vad_provider: VADProvider | None = None,
+    **settings_overrides: Any,
+) -> FastAPI:
     """The real application, wired to a deterministic engine."""
 
     return create_app(
         settings_for_tests(**settings_overrides),
         engine=engine if engine is not None else MockEngine(),
+        vad_provider=vad_provider,
     )
 
 
-def scheduler_app(scheduler: Any, **settings_overrides: Any) -> FastAPI:
+def scheduler_app(
+    scheduler: Any,
+    *,
+    vad_provider: VADProvider | None = None,
+    **settings_overrides: Any,
+) -> FastAPI:
     """The real application, wired to a scheduler double and a mock engine."""
 
     return create_app(
-        settings_for_tests(**settings_overrides), engine=MockEngine(), scheduler=scheduler
+        settings_for_tests(**settings_overrides),
+        engine=MockEngine(),
+        scheduler=scheduler,
+        vad_provider=vad_provider,
     )
 
 
 def realtime_only_app(scheduler: Any = None, config: WebSocketConfig | None = None) -> FastAPI:
-    """Just the realtime router, with no lifespan and no application state.
+    """Build the isolated realtime router with an explicit CPU-only VAD."""
 
-    Used to observe what the endpoint does when no scheduler was ever bound, and
-    to bind non-default WebSocket limits without touching global settings.
-    """
+    provider = EnergyVADProvider(
+        max_streams=128,
+        workers=1,
+        pending_capacity=128,
+        deadline_seconds=0.1,
+        metrics=None,
+    )
 
-    application = FastAPI()
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        try:
+            await provider.startup()
+            yield
+        finally:
+            await provider.close()
+
+    application = FastAPI(lifespan=lifespan)
+    application.state.vad_provider = provider
     application.include_router(create_websocket_router(scheduler, config))
     return application
 

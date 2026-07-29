@@ -15,7 +15,7 @@ RUN case "${CUDA_IMAGE}" in \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 asr \
     && useradd --uid 10001 --gid asr --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin asr \
-    && install --directory --owner=asr --group=asr --mode=0755 /app /models
+    && install --directory --owner=asr --group=asr --mode=0755 /app /models /models/vad
 
 ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python \
     UV_PYTHON_PREFERENCE=only-managed \
@@ -31,7 +31,10 @@ ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python \
     ASR_PORT=8000 \
     ASR_OFFLINE=true \
     ASR_REQUIRE_CUDA=true \
-    ASR_ENGINE=ort
+    ASR_ENGINE=ort \
+    ASR_VAD_PROVIDER=silero \
+    ASR_VAD_MODEL_PATH=/models/vad/silero-v6.2.1/silero_vad.onnx \
+    ASR_VAD_MODEL_SHA256=1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3
 
 WORKDIR /app
 RUN uv python install 3.11

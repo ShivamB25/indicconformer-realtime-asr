@@ -14,7 +14,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.core.config import Settings, get_settings, read_api_key
-from app.core.types import EngineKind
+from app.core.types import EngineKind, VADKind
 
 
 def clear_asr_environment(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -50,6 +50,11 @@ class TestDefaults:
         assert settings.require_cuda is True
         assert settings.sample_rate == 16_000
         assert settings.model_dir is None
+        assert settings.vad_provider is VADKind.ENERGY
+        assert settings.vad_max_streams == 128
+        assert settings.vad_cpu_workers == 2
+        assert settings.vad_pending_capacity == 128
+        assert settings.vad_classification_deadline_seconds == 0.1
 
     def test_a_dotenv_file_in_the_working_directory_is_ignored(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -186,6 +191,7 @@ class TestEngineSelection:
             environment="production",
             engine=EngineKind.ORT,
             api_key_file=Path("/run/secrets/api_key"),
+            vad_provider=VADKind.WEBRTC,
             **artifacts,
         )
         assert settings.api_key_file == Path("/run/secrets/api_key")
@@ -196,6 +202,60 @@ class TestEngineSelection:
         settings = Settings()
         assert settings.engine is EngineKind.MOCK
         assert settings.offline is False
+
+
+class TestVADSelection:
+    def test_provider_kind_set_is_closed(self) -> None:
+        assert [kind.value for kind in VADKind] == ["energy", "silero", "webrtc"]
+
+    @pytest.mark.parametrize("provider", ["TEN", "firered", "auto", ""])
+    def test_unknown_providers_are_rejected(self, provider: str) -> None:
+        with pytest.raises(ValidationError):
+            Settings.model_validate({"vad_provider": provider})
+
+    def test_silero_requires_path_and_lowercase_digest(self, tmp_path: Path) -> None:
+        with pytest.raises(ValidationError, match="vad_model_path"):
+            Settings(vad_provider=VADKind.SILERO)
+        with pytest.raises(ValidationError, match="lowercase SHA-256"):
+            Settings(
+                vad_provider=VADKind.SILERO,
+                vad_model_path=tmp_path / "silero.onnx",
+                vad_model_sha256="NOT-A-DIGEST",
+            )
+
+        settings = Settings(
+            vad_provider=VADKind.SILERO,
+            vad_model_path=tmp_path / "silero.onnx",
+            vad_model_sha256="a" * 64,
+        )
+        assert settings.vad_provider is VADKind.SILERO
+
+    def test_production_rejects_energy_but_allows_explicit_webrtc(self, tmp_path: Path) -> None:
+        artifacts = local_artifacts(tmp_path)
+        common = {
+            "environment": "production",
+            "engine": EngineKind.ORT,
+            "api_key_file": Path("/run/secrets/api_key"),
+            **artifacts,
+        }
+        with pytest.raises(ValidationError, match="energy VAD"):
+            Settings(**common)
+        assert Settings(vad_provider=VADKind.WEBRTC, **common).vad_provider is VADKind.WEBRTC
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("vad_max_streams", 0),
+            ("vad_cpu_workers", 0),
+            ("vad_pending_capacity", 0),
+            ("vad_classification_deadline_seconds", 0),
+            ("vad_webrtc_mode", 4),
+            ("vad_speech_threshold", 1.1),
+        ],
+    )
+    def test_vad_resource_limits_are_bounded(self, field: str, value: object) -> None:
+        with pytest.raises(ValidationError):
+            Settings.model_validate({field: value})
 
 
 class TestApiKeyFile:

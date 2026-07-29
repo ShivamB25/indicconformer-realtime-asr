@@ -47,3 +47,9 @@ class EngineKind(StrEnum):
     MOCK = "mock"
     OFFICIAL = "official"
     ORT = "ort"
+
+
+class VADKind(StrEnum):
+    ENERGY = "energy"
+    SILERO = "silero"
+    WEBRTC = "webrtc"

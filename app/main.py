@@ -12,7 +12,7 @@ from app.api.health import router as health_router
 from app.api.openai import router as openai_router
 from app.api.openai_realtime import router as openai_realtime_router
 from app.api.rest import router as rest_router
-from app.api.websocket import router as websocket_router
+from app.api.websocket import WebSocketConfig, create_websocket_router
 from app.core.config import Settings, get_settings
 from app.core.lifespan import Scheduler, build_lifespan
 from app.core.logging import configure_logging
@@ -22,6 +22,7 @@ from app.observability.metrics import MetricCode, install_metrics
 from app.openai_compat.constants import is_openai_route
 from app.openai_compat.errors import OpenAIError, openai_error_response
 from app.schemas.rest import ErrorResponse
+from app.vad.base import VADProvider
 
 
 @lru_cache(maxsize=1)
@@ -53,6 +54,7 @@ def create_app(
     *,
     engine: Engine | None = None,
     scheduler: Scheduler | None = None,
+    vad_provider: VADProvider | None = None,
 ) -> FastAPI:
     """Construct the service without loading model runtimes or assets."""
 
@@ -65,6 +67,7 @@ def create_app(
             runtime_settings,
             engine=engine,
             scheduler=scheduler,
+            vad_provider=vad_provider,
         ),
     )
 
@@ -123,12 +126,17 @@ def create_app(
     application.state.readiness = ReadinessTracker()
     application.state.engine = None
     application.state.scheduler = None
+    application.state.vad_provider = None
     install_metrics(application)
     application.include_router(health_router)
     application.include_router(rest_router)
     application.include_router(openai_router)
     application.include_router(openai_realtime_router)
-    application.include_router(websocket_router)
+    application.include_router(
+        create_websocket_router(
+            config=WebSocketConfig(vad_threshold=runtime_settings.vad_speech_threshold)
+        )
+    )
     return application
 
 

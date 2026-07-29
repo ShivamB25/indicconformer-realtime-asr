@@ -8,9 +8,9 @@ from dataclasses import dataclass
 from app.audio.endpoint import AdaptivePartialCadence, EndpointDetector
 from app.audio.pcm import PCM16_FRAME_BYTES, PCM16Buffer
 from app.audio.stable_prefix import RollingStablePrefix
-from app.audio.vad import EnergyVAD
 from app.core.types import Decoder
 from app.schemas.protocol import SessionStartEvent
+from app.vad.base import VADStream
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,7 +20,7 @@ class WebSocketConfig:
     max_frame_bytes: int = PCM16_FRAME_BYTES
     max_utterance_ms: int = 30_000
     idle_timeout_seconds: float = 30.0
-    vad_threshold: float = 0.015
+    vad_threshold: float | None = None
     speech_start_ms: int = 60
     speech_end_ms: int = 600
     partial_history: int = 3
@@ -39,6 +39,10 @@ class WebSocketConfig:
             raise ValueError("max_frame_bytes cannot be smaller than one PCM frame")
         if self.max_utterance_ms <= 0 or self.max_utterance_ms % 20:
             raise ValueError("max_utterance_ms must be a positive multiple of 20 ms")
+        if self.vad_threshold is not None and (
+            isinstance(self.vad_threshold, bool) or not 0.0 <= self.vad_threshold <= 1.0
+        ):
+            raise ValueError("vad_threshold must be in [0, 1]")
         if self.partial_history < 2:
             raise ValueError("partial_history must be at least two")
         cadences = (self.partial_latency_ms, self.partial_hybrid_ms, self.partial_accuracy_ms)
@@ -77,7 +81,9 @@ class _LiveSession:
     final_decoder: Decoder
     buffer: PCM16Buffer
     endpoint: EndpointDetector
-    vad: EnergyVAD
+    vad: VADStream | None
+    vad_provider_name: str | None
+    vad_threshold: float | None
     cadence: AdaptivePartialCadence
     stable_prefix: RollingStablePrefix
     revision: int = 0

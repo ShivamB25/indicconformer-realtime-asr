@@ -22,7 +22,7 @@ client microphone / WAV
         v
 FastAPI gateway
   +-- protocol validation and admission control
-  +-- energy VAD and endpoint detector
+  +-- process-owned bounded VAD provider and per-session stream state
   +-- bounded per-session audio buffers
   +-- final-first, bounded, dynamic-batching scheduler
         |
@@ -57,7 +57,8 @@ app/openai_compat/                  OpenAI-specific wire contracts and mapping
   realtime/schemas.py               client/server Pydantic event models
   realtime/state.py                 buffers, VAD state, and committed turns
 app/transcription.py                transport-independent transcription use case
-app/audio/                          PCM, resampling, VAD, endpointing, stable prefix
+app/audio/                          PCM, resampling, endpointing, stable prefix
+app/vad/                            Energy, WebRTC, and direct-ONNX Silero providers
 app/engine/                         engine contracts, scheduler, ORT and decoders
 app/core/                           settings, lifespan, readiness, logging, shared types
 app/observability/                  metrics and tracing
@@ -127,6 +128,56 @@ uv sync --frozen --extra official-gpu
 Never use `uv sync --all-extras`: it would attempt to resolve mutually exclusive
 CPU and GPU runtime wheels. The production ORT image intentionally excludes the
 separate multi-gigabyte PyTorch stack.
+
+## Voice activity detection
+
+VAD is a process-owned provider with one isolated stream per VAD-enabled
+connection. Both native 16 kHz PCM and OpenAI-compatible 24 kHz PCM enter as
+exact 20 ms frames. The selected provider owns model/resampler state, bounded
+CPU workers, pending admission, deadlines, and live-stream leases; transport
+handlers own protocol thresholds and endpoint state. A provider error fails the
+affected session instead of switching algorithms mid-utterance.
+
+| `ASR_VAD_PROVIDER` | Intended use | Production |
+| --- | --- | --- |
+| `silero` | Pinned Silero VAD 6.2.1 through direct CPU ONNX Runtime | Default Compose choice |
+| `webrtc` | Lightweight binary baseline; modes `0` through `3` | Explicit alternative |
+| `energy` | Deterministic normalized-RMS development/rollback provider | Rejected at startup |
+
+The local default is `energy`; production must explicitly select `silero` or
+`webrtc`. Core controls are:
+
+```dotenv
+ASR_VAD_PROVIDER=silero
+ASR_VAD_MODEL_PATH=/models/vad/silero-v6.2.1/silero_vad.onnx
+ASR_VAD_MODEL_SHA256=1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3
+ASR_VAD_MAX_STREAMS=128
+ASR_VAD_CPU_WORKERS=2
+ASR_VAD_PENDING_CAPACITY=128
+ASR_VAD_CLASSIFICATION_DEADLINE_SECONDS=0.1
+ASR_VAD_SPEECH_THRESHOLD=0.5
+ASR_WEBRTC_VAD_MODE=1
+```
+
+`ASR_VAD_SPEECH_THRESHOLD` is the native protocol override. OpenAI realtime
+uses the `server_vad.threshold` supplied in `session.update`. Silero consumes
+contiguous 512-sample windows while preserving its recurrent/context state;
+the 20 ms transport frame is never zero-padded or dropped. WebRTC resamples
+24 kHz input statefully to its exact 16 kHz frame contract.
+
+Provision or verify the immutable Silero ONNX model and license outside the
+serving process:
+
+```bash
+uv run python scripts/download_vad_model.py --output-dir /models/vad/silero-v6.2.1
+uv run python scripts/download_vad_model.py \
+  --output-dir /models/vad/silero-v6.2.1 --offline
+```
+
+The downloader pins the upstream revision and SHA-256 digests, publishes
+atomically, rejects symlinks/non-regular files, and is idempotent. Compose runs
+it in `model-init`; the serving container receives the completed volume
+read-only and remains offline.
 
 ## OpenAI-compatible API
 
@@ -459,8 +510,10 @@ Use `/health/live` for restart decisions and `/health/ready` for load-balancer
 admission. Do not route production traffic until readiness is successful.
 
 Structured logs deliberately redact audio and transcript content. Prometheus
-metrics expose queue depth, admission/protocol errors, session lifecycle, audio
-seconds, and latency—not audio payloads or text.
+metrics expose scheduler/VAD queue depth, selected VAD provider, live VAD
+streams, decisions, endpoint events, bounded runtime errors, queue/inference
+latency, admission/protocol errors, session lifecycle, and audio seconds—not
+audio payloads or text. All label domains are closed.
 
 ## Benchmark and release gates
 
@@ -475,6 +528,27 @@ uv run python scripts/benchmark.py \
   --decoder ctc,rnnt \
   --output benchmark.json
 ```
+
+Compare Energy, WebRTC modes 0–3, and the pinned Silero model on the same
+labeled corpus:
+
+```bash
+uv run python scripts/benchmark_vad.py --self-check
+uv run python scripts/benchmark_vad.py \
+  --manifest /protected/vad/benchmark-manifest.json \
+  --silero-model /models/vad/silero-v6.2.1/silero_vad.onnx \
+  --max-concurrency 32 \
+  --output vad-benchmark.json
+```
+
+The VAD manifest is validated against
+`scripts/vad_benchmark_manifest.schema.json` and pins every audio/noise file by
+SHA-256. The report includes overall, per-language, per-condition, and
+per-variant frame F1, miss rate, false-positive time, false activations/hour,
+onset/endpoint p50/p95, CPU real-time factor, classification p50/p95,
+RSS/live-stream, and sustainable bounded concurrency. Run all providers on the
+same pre-generated noisy multilingual corpus; the synthetic self-check proves
+the pipeline only, not model quality.
 
 The benchmark filters mode/decoder selections to valid server mappings and
 gates p95 latency, real-time factor, and throughput without logging audio or
@@ -496,6 +570,14 @@ GET /health/live                         -> {"status":"live"}
 GET /health/ready                        -> engine=ready, scheduler=ready
 POST /v1/transcribe (hi, hybrid, 5.16 s) -> decoder=rnnt, HTTP 200
 GET /metrics                             -> Hindi hybrid transcription counter incremented
+```
+
+The current VAD implementation was also exercised locally with the MockEngine:
+
+```text
+WS /v1/realtime (WebRTC VAD)             -> ready, speech.started, transcript.final
+WS /v1/realtime/transcription_sessions  -> one OpenAI speech/commit/delta/completed chain
+GET /metrics                             -> WebRTC selected and OpenAI endpoint incremented
 ```
 
 The exercised audio was a Google FLEURS `hi_in` dev recording from its

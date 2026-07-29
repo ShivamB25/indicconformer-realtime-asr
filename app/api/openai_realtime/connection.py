@@ -8,7 +8,7 @@ import binascii
 import json
 import time
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, NoReturn
 from uuid import uuid4
 
 from fastapi import WebSocket, WebSocketDisconnect
@@ -39,11 +39,10 @@ from app.openai_compat.realtime import (
     TranscriptionDeltaEvent,
     TranscriptionFailedEvent,
     TurnSnapshot,
-    frame_is_speech,
 )
+from app.vad.base import VADCapacityError, VADError, VADInferenceError, VADProvider, VADStream
 
 MAX_EVENT = 15 * 1024 * 1024
-FRAME_BYTES = 960
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,12 +154,36 @@ def _schedule(
     task.add_done_callback(tasks.discard)
 
 
+async def _vad_failure(
+    ws: WebSocket,
+    lock: asyncio.Lock,
+    exc: VADError,
+    causal: str | None,
+) -> NoReturn:
+    if isinstance(exc, VADCapacityError):
+        code = "vad_capacity_exceeded"
+        message = "voice activity detection capacity was exceeded"
+        close_code = 1013
+    else:
+        code = "vad_inference_failed"
+        message = "voice activity detection failed"
+        close_code = 1011
+    await _error(ws, lock, code, message, causal, kind="server_error")
+    await ws.close(code=close_code)
+    raise _VADConnectionClosed
+
+
+class _VADConnectionClosed(Exception):
+    """The VAD error event and terminal close frame have already been sent."""
+
+
 async def _commit(
     ws: WebSocket,
     lock: asyncio.Lock,
     scheduler: Any,
     tasks: set[asyncio.Task[None]],
     state: RealtimeSessionState,
+    vad_stream: VADStream | None,
     causal: str | None,
     item_id: str,
     size: int | None = None,
@@ -170,6 +193,8 @@ async def _commit(
     except ValueError as exc:
         await _error(ws, lock, "invalid_audio_buffer", str(exc), causal, "audio")
         return False
+    if vad_stream is not None:
+        vad_stream.reset()
     await _send(
         ws,
         lock,
@@ -187,19 +212,30 @@ async def _vad(
     scheduler: Any,
     tasks: set[asyncio.Task[None]],
     state: RealtimeSessionState,
+    vad_stream: VADStream | None,
     causal: str | None,
 ) -> None:
     config = state.turn_detection
     if config is None:
         return
-    stop_frames = (config.silence_duration_ms + 19) // 20
-    while len(state.audio) - state.vad_scan_bytes >= FRAME_BYTES:
-        end = state.vad_scan_bytes + FRAME_BYTES
-        speech = frame_is_speech(
-            memoryview(bytes(state.audio[state.vad_scan_bytes : end])), config.threshold
+    if vad_stream is None:
+        await _vad_failure(
+            ws,
+            lock,
+            VADInferenceError("configured VAD stream is unavailable"),
+            causal,
         )
-        state.vad_scan_bytes = end
-        absolute_end = (state.total_audio_bytes - len(state.audio) + end) * 1000 // 48000
+    stop_frames = (config.silence_duration_ms + 19) // 20
+    while (pending := state.next_vad_frame()) is not None:
+        frame, absolute_end = pending
+        try:
+            score = await vad_stream.score(frame)
+        except VADCapacityError as exc:
+            await _vad_failure(ws, lock, exc, causal)
+        except VADError as exc:
+            await _vad_failure(ws, lock, exc, causal)
+        speech = score >= config.threshold
+        ws.app.state.metrics.record_vad_decision(ws.app.state.vad_provider.name, speech)
         if not state.speech_active:
             state.speech_run_frames = state.speech_run_frames + 1 if speech else 0
             if state.speech_run_frames < 3:
@@ -220,14 +256,43 @@ async def _vad(
         if state.silence_run_frames < stop_frames:
             continue
         item = state.pending_item_id or _id("item")
+        ws.app.state.metrics.record_vad_endpoint_event("openai")
         await _send(
             ws,
             lock,
             SpeechStoppedEvent(event_id=_id("event"), audio_end_ms=absolute_end, item_id=item),
         )
-        if not await _commit(ws, lock, scheduler, tasks, state, causal, item, state.vad_scan_bytes):
+        if not await _commit(
+            ws,
+            lock,
+            scheduler,
+            tasks,
+            state,
+            vad_stream,
+            causal,
+            item,
+            state.vad_scan_bytes,
+        ):
             state.reset_vad()
+            vad_stream.reset()
             return
+
+
+def _configure_vad_stream(
+    provider: VADProvider | None,
+    current: VADStream | None,
+    state: RealtimeSessionState,
+) -> VADStream | None:
+    if state.turn_detection is None:
+        if current is not None:
+            current.close()
+        return None
+    if current is None:
+        if provider is None:
+            raise VADInferenceError("VAD provider is unavailable")
+        return provider.new_stream(24_000)
+    current.reset()
+    return current
 
 
 async def _handle(
@@ -236,8 +301,10 @@ async def _handle(
     scheduler: Any,
     tasks: set[asyncio.Task[None]],
     state: RealtimeSessionState,
+    vad_provider: Any,
+    vad_stream: VADStream | None,
     event: object,
-) -> None:
+) -> VADStream | None:
     if isinstance(event, SessionUpdateEvent):
         try:
             state.apply_update(
@@ -253,14 +320,20 @@ async def _handle(
                 exc.param,
                 "server_error" if exc.type == "server_error" else "invalid_request_error",
             )
-            return
+            return vad_stream
         except ValueError as exc:
             await _error(ws, lock, "invalid_session", str(exc), event.event_id, "session")
-            return
+            return vad_stream
+        try:
+            vad_stream = _configure_vad_stream(vad_provider, vad_stream, state)
+        except VADCapacityError as exc:
+            await _vad_failure(ws, lock, exc, event.event_id)
+        except VADError as exc:
+            await _vad_failure(ws, lock, exc, event.event_id)
         await _send(
             ws, lock, SessionUpdatedEvent(event_id=_id("event"), session=state.session_payload())
         )
-        return
+        return vad_stream
     if isinstance(event, AudioAppendEvent):
         if not state.configured:
             await _error(
@@ -270,7 +343,7 @@ async def _handle(
                 "session.update with exactly one language is required before audio",
                 event.event_id,
             )
-            return
+            return vad_stream
         try:
             data = base64.b64decode(event.audio, validate=True)
         except (binascii.Error, ValueError):
@@ -282,18 +355,20 @@ async def _handle(
                 event.event_id,
                 "audio",
             )
-            return
+            return vad_stream
         try:
             state.append(data)
         except OverflowError as exc:
             await _error(ws, lock, "audio_limit_exceeded", str(exc), event.event_id, "audio")
-            return
-        await _vad(ws, lock, scheduler, tasks, state, event.event_id)
-        return
+            return vad_stream
+        await _vad(ws, lock, scheduler, tasks, state, vad_stream, event.event_id)
+        return vad_stream
     if isinstance(event, AudioClearEvent):
         state.clear()
+        if vad_stream is not None:
+            vad_stream.reset()
         await _send(ws, lock, AudioClearedEvent(event_id=_id("event")))
-        return
+        return vad_stream
     assert isinstance(event, AudioCommitEvent)
     item = state.pending_item_id or _id("item")
     if state.speech_active:
@@ -306,7 +381,8 @@ async def _handle(
                 item_id=item,
             ),
         )
-    await _commit(ws, lock, scheduler, tasks, state, event.event_id, item)
+    await _commit(ws, lock, scheduler, tasks, state, vad_stream, event.event_id, item)
+    return vad_stream
 
 
 async def _serve(ws: WebSocket, scheduler: Any, config: OpenAIRealtimeConfig) -> None:
@@ -336,6 +412,8 @@ async def _serve(ws: WebSocket, scheduler: Any, config: OpenAIRealtimeConfig) ->
         model=MODEL_ID,
     )
     tasks: set[asyncio.Task[None]] = set()
+    vad_provider = getattr(ws.app.state, "vad_provider", None)
+    vad_stream: VADStream | None = None
     started = time.monotonic()
     await _send(
         ws, lock, SessionCreatedEvent(event_id=_id("event"), session=state.session_payload())
@@ -373,10 +451,14 @@ async def _serve(ws: WebSocket, scheduler: Any, config: OpenAIRealtimeConfig) ->
             except ValidationError as exc:
                 await _error(ws, lock, "invalid_event", _validation(exc), causal)
                 continue
-            await _handle(ws, lock, scheduler, tasks, state, event)
-    except (TimeoutError, WebSocketDisconnect):
+            vad_stream = await _handle(
+                ws, lock, scheduler, tasks, state, vad_provider, vad_stream, event
+            )
+    except (TimeoutError, WebSocketDisconnect, _VADConnectionClosed):
         return
     finally:
+        if vad_stream is not None:
+            vad_stream.close()
         for task in tasks:
             task.cancel()
         if tasks:
