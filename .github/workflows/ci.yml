@@ -164,6 +164,7 @@ jobs:
         with:
           version: ${{ env.UV_VERSION }}
           python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: false
 
       # scripts/benchmark.py is standard-library only so it can also run inside
       # the release image on a GPU runner. Verify that here, without a venv.
