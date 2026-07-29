@@ -25,8 +25,8 @@ RUN case "${RUNTIME_IMAGE}" in \
       *) echo >&2 "RUNTIME_IMAGE must be pinned by digest"; exit 64 ;; \
     esac \
     && case "${UV_EXTRA}" in \
-      cpu|gpu) ;; \
-      *) echo >&2 "UV_EXTRA must be cpu or gpu"; exit 64 ;; \
+      cpu|gpu|official-cpu|official-gpu) ;; \
+      *) echo >&2 "UV_EXTRA must be cpu, gpu, official-cpu, or official-gpu"; exit 64 ;; \
     esac \
     && apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends ca-certificates libgomp1 libsndfile1 tini \

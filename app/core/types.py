@@ -50,6 +50,7 @@ class EngineKind(StrEnum):
 
 
 class VADKind(StrEnum):
+    DISABLED = "disabled"
     ENERGY = "energy"
     SILERO = "silero"
     WEBRTC = "webrtc"

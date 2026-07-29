@@ -50,14 +50,15 @@
   transcripts in source, images, logs, metrics, fixtures, or CI artifacts.
 - Model loading is local-only and revision-pinned. Do not add request-time Hub
   downloads or CPU fallback to the production ORT engine.
-- CPU and GPU ONNX Runtime extras conflict. Use `--extra cpu --group dev` for
-  local/CI work and `--extra gpu --no-group dev` for the serving image; never
-  synchronize all extras.
-- The optional `official-gpu` Transformers wrapper is not part of the lean ORT
-  production image.
-- Production VAD must be `silero` or `webrtc`; `energy` is an explicit
-  development/rollback implementation and must continue to fail validation in
-  production.
+- CPU and GPU ONNX Runtime extras conflict. The official-wrapper CPU/GPU extras
+  also conflict with each other and with the lean ORT extras. Use
+  `--extra cpu --group dev` for local/CI work, `--extra gpu --no-group dev` for
+  the ORT serving image, and exactly one of `official-cpu` or `official-gpu`
+  when running the trusted Transformers wrapper; never synchronize all extras.
+- Production VAD must be `disabled`, `silero`, or `webrtc`; `disabled` requires
+  client commits because it performs no automatic endpointing. `energy` is an
+  explicit development/rollback implementation and must continue to fail
+  validation in production.
 - Keep the Silero revision, URL, model SHA-256, and downloader identity in
   `app/vad/artifact.py`. Runtime code and provisioning must import that single
   definition. Never bake VAD weights into the image or fetch them at startup.

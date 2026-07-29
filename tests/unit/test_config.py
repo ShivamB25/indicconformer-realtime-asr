@@ -206,7 +206,7 @@ class TestEngineSelection:
 
 class TestVADSelection:
     def test_provider_kind_set_is_closed(self) -> None:
-        assert [kind.value for kind in VADKind] == ["energy", "silero", "webrtc"]
+        assert [kind.value for kind in VADKind] == ["disabled", "energy", "silero", "webrtc"]
 
     @pytest.mark.parametrize("provider", ["TEN", "firered", "auto", ""])
     def test_unknown_providers_are_rejected(self, provider: str) -> None:

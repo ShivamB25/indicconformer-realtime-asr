@@ -21,7 +21,7 @@ from prometheus_client import (
     generate_latest,
 )
 
-from app.core.types import LanguageCode, ProcessingMode
+from app.core.types import LanguageCode, ProcessingMode, VADKind
 
 _QUEUE_BUCKETS = (
     0.001,
@@ -86,7 +86,7 @@ class MetricCode(StrEnum):
 _LANGUAGES = frozenset(item.value for item in LanguageCode)
 _MODES = frozenset(item.value for item in ProcessingMode)
 _CODES = frozenset(item.value for item in MetricCode)
-_VAD_PROVIDERS = frozenset(("energy", "webrtc", "silero"))
+_VAD_PROVIDERS = frozenset(item.value for item in VADKind)
 _VAD_PROTOCOLS = frozenset(("native", "openai"))
 _VAD_RESULTS = frozenset(("speech", "silence"))
 _VAD_ERRORS = frozenset(("capacity", "deadline", "inference"))

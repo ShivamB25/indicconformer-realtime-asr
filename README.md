@@ -121,13 +121,14 @@ uv run pytest -q
 # Production ORT/CUDA environment; excludes the development group
 uv sync --frozen --extra gpu --no-group dev
 
-# Only for the optional official Transformers wrapper engine, not the ORT service
+# Official Transformers wrapper with local CPU or CUDA inference
+uv sync --frozen --extra official-cpu
 uv sync --frozen --extra official-gpu
 ```
 
-Never use `uv sync --all-extras`: it would attempt to resolve mutually exclusive
-CPU and GPU runtime wheels. The production ORT image intentionally excludes the
-separate multi-gigabyte PyTorch stack.
+Never use `uv sync --all-extras`: each lean ORT or official-wrapper CPU/GPU
+runtime selects one mutually exclusive wheel set. The production ORT image
+intentionally excludes the separate multi-gigabyte PyTorch stack.
 
 ## Voice activity detection
 
@@ -140,12 +141,14 @@ affected session instead of switching algorithms mid-utterance.
 
 | `ASR_VAD_PROVIDER` | Intended use | Production |
 | --- | --- | --- |
+| `disabled` | No classifier; every valid frame is retained until client commit | Explicit opt-out |
 | `silero` | Pinned Silero VAD 6.2.1 through direct CPU ONNX Runtime | Default Compose choice |
 | `webrtc` | Lightweight binary baseline; modes `0` through `3` | Explicit alternative |
 | `energy` | Deterministic normalized-RMS development/rollback provider | Rejected at startup |
 
-The local default is `energy`; production must explicitly select `silero` or
-`webrtc`. Core controls are:
+The local default is `energy`; production must explicitly select `disabled`,
+`silero`, or `webrtc`. With `disabled`, automatic endpointing is unavailable
+and clients must send `input.commit`.
 
 ```dotenv
 ASR_VAD_PROVIDER=silero
@@ -484,6 +487,13 @@ docker build -f deploy/Dockerfile \
   --build-arg UV_EXTRA=cpu \
   --build-arg ASR_REQUIRE_CUDA=false \
   -t shivam250/indicconformer-realtime-asr:cpu-vad .
+
+# CPU official-wrapper engine used for real local CPU transcription
+docker build -f deploy/Dockerfile \
+  --build-arg RUNTIME_IMAGE=ubuntu:22.04@sha256:0e0a0fc6d18feda9db1590da249ac93e8d5abfea8f4c3c0c849ce512b5ef8982 \
+  --build-arg UV_EXTRA=official-cpu \
+  --build-arg ASR_REQUIRE_CUDA=false \
+  -t indic-asr-local:cpu-official .
 ```
 
 ### Compose deployment

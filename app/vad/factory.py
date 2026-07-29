@@ -14,6 +14,14 @@ def build_vad_provider(
 ) -> VADProvider:
     """Construct exactly the configured provider without loading model artifacts."""
 
+    if settings.vad_provider is VADKind.DISABLED:
+        from app.vad.disabled import DisabledVADProvider
+
+        return DisabledVADProvider(
+            max_streams=settings.vad_max_streams,
+            metrics=metrics,
+        )
+
     if settings.vad_provider is VADKind.ENERGY:
         from app.vad.energy import EnergyVADProvider
 
