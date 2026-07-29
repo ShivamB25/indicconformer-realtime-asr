@@ -230,7 +230,6 @@ def _schedule(
 ) -> None:
     task = asyncio.create_task(_infer(ws, lock, scheduler, session_id, turn))
     tasks.add(task)
-    task.add_done_callback(tasks.discard)
 
 
 async def _vad_failure(

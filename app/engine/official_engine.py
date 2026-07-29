@@ -7,6 +7,7 @@ until application startup.
 
 from __future__ import annotations
 
+import importlib
 from collections.abc import Mapping
 from pathlib import Path
 from time import perf_counter
@@ -122,14 +123,17 @@ class OfficialIndicConformerEngine(BaseEngine):
     def _load_sync(self) -> None:
         self._verify_snapshot()
 
-        # Heavy optional dependencies are deliberately startup-only.
+        # Heavy optional dependencies are deliberately startup-only. Dynamic
+        # import keeps the common dev environment independent of their stubs.
         try:
-            import torch  # type: ignore[import-not-found]
-            from transformers import AutoConfig, AutoModel  # type: ignore[import-not-found]
+            torch = importlib.import_module("torch")
+            transformers = importlib.import_module("transformers")
         except ImportError as exc:
             raise RuntimeError(
                 "the official engine requires the production torch/transformers extras"
             ) from exc
+        AutoConfig = transformers.AutoConfig
+        AutoModel = transformers.AutoModel
 
         if self._require_cuda and not torch.cuda.is_available():
             raise RuntimeError("CUDA is required but is not available")
