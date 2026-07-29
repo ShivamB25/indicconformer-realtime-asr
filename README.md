@@ -30,7 +30,9 @@ uv run mypy app
 uv run pytest -q
 ```
 
-The production image synchronizes `--extra gpu --no-group dev`. Its CUDA base and
+The production ORT image synchronizes `--extra gpu --no-group dev`, so it does not
+carry the separate multi-gigabyte PyTorch stack. Install `--extra official-gpu`
+only when running the optional Hugging Face wrapper engine. The CUDA base and
 external uv bootstrap image are digest-pinned. Never use `uv sync --all-extras`.
 
 ## Local CPU-safe service
