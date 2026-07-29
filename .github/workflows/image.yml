@@ -324,8 +324,11 @@ jobs:
           sbom: true
           provenance: mode=max
 
+      # GitHub's attestation API rejects user-owned private repositories. Buildx
+      # still publishes the OCI SBOM and provenance attestations above; persist
+      # a GitHub attestation only where the API supports it.
       - name: Attest build provenance in the registry
-        if: ${{ github.event_name != 'pull_request' }}
+        if: ${{ github.event_name != 'pull_request' && !github.event.repository.private }}
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-name: ${{ steps.name.outputs.image }}
