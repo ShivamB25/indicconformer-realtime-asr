@@ -195,6 +195,48 @@ OpenAPI does not execute WebSocket protocols. The Swagger introduction lists
 both realtime URLs and their audio framing requirements; use the native or
 OpenAI realtime client examples below to exercise them.
 
+## Live CPU deployments
+
+Two real, offline IndicConformer CPU services are deployed behind the
+system-managed Cloudflare Tunnel:
+
+| Mode | Public base URL | Local origin | Container |
+| --- | --- | --- | --- |
+| Silero VAD (default) | `https://audio.aniex.site` | `http://127.0.0.1:18011` | `indic-asr-cpu-vad` |
+| No VAD (manual commit) | `https://audio-manual.aniex.site` | `http://127.0.0.1:18010` | `indic-asr-cpu-no-vad` |
+
+Both containers use `restart=unless-stopped`. Public readiness, REST
+transcription, and permanent WSS handshakes have been verified through
+Cloudflare. Useful public endpoints are:
+
+```text
+GET  /health/ready
+GET  /docs
+GET  /openapi.json
+POST /v1/transcribe
+POST /v1/audio/transcriptions
+WSS  /v1/realtime
+WSS  /v1/realtime/transcription_sessions
+```
+
+Both deployments use one shared bearer key. Its value exists only in the
+untracked host file `/home/ubuntu/ai4bharatASR/.secrets/cpu_api_key`; supply it
+to clients through the `ASR_API_KEY` environment variable and send
+`Authorization: Bearer <key>`. Never paste the value into prompts, source,
+frontend bundles, logs, or Git.
+
+The no-VAD deployment retains valid audio until the client sends
+`input.commit`; the Silero deployment can emit speech lifecycle events and
+perform automatic endpointing. A browser's native `WebSocket` constructor
+cannot attach the required `Authorization` header. Direct browser microphone
+clients therefore need a trusted backend proxy or a short-lived connection
+ticket mechanism; Python and Node clients can authenticate the WSS upgrade
+directly.
+
+The Cloudflare tunnel is remotely managed and runs as `cloudflared.service`.
+Persistent public hostnames belong in that tunnel's dashboard configuration,
+not in ephemeral `trycloudflare.com` quick tunnels.
+
 ## OpenAI-compatible API
 
 The primary client surface is compatible with an unmodified current

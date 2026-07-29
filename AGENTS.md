@@ -69,6 +69,30 @@
   Never add session IDs, audio, transcript content, exception text, paths, or
   user-controlled strings as metric labels.
 
+## Live CPU deployment memory
+
+- The verified real-model CPU image is `indic-asr-local:cpu-official`, built
+  with the mutually exclusive `official-cpu` uv extra. It loads the pinned
+  checkpoint from a read-only local mount and must remain offline at runtime.
+- `indic-asr-cpu-vad` serves `http://127.0.0.1:18011` through
+  `https://audio.aniex.site` with Silero VAD.
+- `indic-asr-cpu-no-vad` serves `http://127.0.0.1:18010` through
+  `https://audio-manual.aniex.site` with VAD disabled; realtime clients must
+  send `input.commit`.
+- Both containers use `restart=unless-stopped`. The existing
+  `cloudflared.service` is a remotely managed token tunnel; configure durable
+  public hostnames in Cloudflare, never with ephemeral quick tunnels.
+- Both deployments share the bearer secret at
+  `/home/ubuntu/ai4bharatASR/.secrets/cpu_api_key`. Store its client-side value
+  as `ASR_API_KEY`; never copy the value into this repository, prompts,
+  frontend code, logs, or test fixtures.
+- Public `/health/ready`, real Hindi REST transcription, and permanent WSS
+  `session.ready` were verified for both hostnames. Re-verify all three after
+  changing containers, origins, tunnel routes, authentication, or model assets.
+- Native browser `WebSocket` cannot add the required bearer header. Browser
+  microphone integrations need a trusted backend proxy or short-lived ticket
+  authentication; never expose the shared service key to a browser.
+
 ## Change verification
 
 - Use the deterministic MockEngine for CPU protocol, scheduling, health, and
