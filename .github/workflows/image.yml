@@ -148,14 +148,27 @@ jobs:
         with:
           persist-credentials: false
 
-      # The pinned CUDA/cuDNN base expands to several GiB. GitHub-hosted runners
-      # also preinstall unrelated SDKs on the same filesystem; remove those
-      # before BuildKit imports the audit image into Docker.
+      # The pinned CUDA/cuDNN base plus GPU Torch wheels can exceed the free
+      # space left by GitHub's preinstalled SDKs. Remove the complete hosted
+      # tool cache and unrelated toolchains before BuildKit creates its own
+      # layer store and the separate Docker image used by the filesystem audit.
       - name: Reclaim runner disk for CUDA image
         run: |
           set -euo pipefail
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
-          docker system prune --all --force
+          df -h /
+          sudo rm -rf \
+            /opt/az \
+            /opt/ghc \
+            /opt/google \
+            /opt/hostedtoolcache \
+            /opt/microsoft \
+            /usr/local/.ghcup \
+            /usr/local/julia* \
+            /usr/local/lib/android \
+            /usr/local/share/boost \
+            /usr/share/dotnet \
+            /usr/share/swift
+          docker system prune --all --force --volumes
           df -h /
 
       - name: Resolve image name
