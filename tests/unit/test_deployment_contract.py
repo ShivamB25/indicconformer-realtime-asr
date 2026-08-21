@@ -98,6 +98,8 @@ def test_compose_prepares_identity_readable_secrets_without_exposing_both() -> N
         "model-data:/models",
         "hf-token-data:/run/secrets/hf:ro",
     ]
+    assert services["model-init"]["environment"]["HOME"] == "/tmp"
+    assert services["model-init"]["environment"]["HF_HOME"] == "/tmp/huggingface"
 
 
 def test_image_workflow_stages_sha_before_gated_semantic_promotion() -> None:

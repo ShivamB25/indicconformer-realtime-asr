@@ -127,6 +127,8 @@ services:
       HF_HUB_OFFLINE: "0"
       TRANSFORMERS_OFFLINE: "0"
       HF_HUB_DISABLE_TELEMETRY: "1"
+      HOME: /tmp
+      HF_HOME: /tmp/huggingface
       DO_NOT_TRACK: "1"
     volumes:
       - model-data:/models
