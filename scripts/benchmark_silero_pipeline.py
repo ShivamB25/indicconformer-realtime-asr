@@ -16,7 +16,7 @@ from app.vad.silero import SileroVADProvider
 
 _MODEL_PATH = Path(".models/vad/silero-v6.2.1/silero_vad.onnx")
 _FRAME_DURATION_MS = 20
-_MEASURED_FRAMES = 400
+_MEASURED_FRAMES = 4_000
 _REPETITIONS = 5
 _WARMUP_FRAMES = 80
 _SAMPLE_RATES: tuple[VADSampleRate, ...] = (16_000, 24_000)
