@@ -34,6 +34,7 @@ _WINDOW_SAMPLES = 512
 _CONTEXT_SAMPLES = 64
 _STATE_SHAPE = (2, 1, 128)
 _INITIAL_SCORE = 0.0
+_PCM16_SCALE = np.float32(1.0 / 32_768.0)
 _SAMPLE_RATE_TENSOR = np.asarray(_MODEL_SAMPLE_RATE, dtype=np.int64)
 _SAMPLE_RATE_TENSOR.flags.writeable = False
 
@@ -275,6 +276,7 @@ class SileroVADStream:
         "_context",
         "_epoch",
         "_failed",
+        "_expected_frame_bytes",
         "_fifo",
         "_fifo_samples",
         "_held_score",
@@ -295,6 +297,7 @@ class SileroVADStream:
         release_lease: Callable[[], None],
     ) -> None:
         self._input_sample_rate = input_sample_rate
+        self._expected_frame_bytes = expected_frame_bytes(input_sample_rate)
         self._session = session
         self._runtime = runtime
         self._release_lease = release_lease
@@ -380,11 +383,12 @@ class SileroVADStream:
     def _decode_frame(self, pcm16_20ms: bytes) -> _FloatArray:
         if not isinstance(pcm16_20ms, bytes):
             raise ValueError("Silero VAD frame must be immutable bytes")
-        required = expected_frame_bytes(self._input_sample_rate)
-        if len(pcm16_20ms) != required:
-            raise ValueError(f"Silero VAD requires exactly {required} PCM16LE bytes")
+        if len(pcm16_20ms) != self._expected_frame_bytes:
+            raise ValueError(
+                f"Silero VAD requires exactly {self._expected_frame_bytes} PCM16LE bytes"
+            )
         integers = np.frombuffer(pcm16_20ms, dtype="<i2")
-        return integers.astype(np.float32) * np.float32(1.0 / 32768.0)
+        return np.multiply(integers, _PCM16_SCALE, dtype=np.float32)
 
     def _resample(self, samples: _FloatArray) -> _FloatArray:
         if self._input_sample_rate == _MODEL_SAMPLE_RATE:
