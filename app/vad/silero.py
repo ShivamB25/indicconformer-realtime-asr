@@ -35,6 +35,7 @@ _CONTEXT_SAMPLES = 64
 _STATE_SHAPE = (2, 1, 128)
 _INITIAL_SCORE = 0.0
 _PCM16_SCALE = np.float32(1.0 / 32_768.0)
+_OUTPUT_NAMES = ("output", "stateN")
 _SAMPLE_RATE_TENSOR = np.asarray(_MODEL_SAMPLE_RATE, dtype=np.int64)
 _SAMPLE_RATE_TENSOR.flags.writeable = False
 
@@ -432,7 +433,7 @@ def _run_inference(
     session: _InferenceSession, model_input: _FloatArray, state_input: _FloatArray
 ) -> tuple[float, _FloatArray, _FloatArray]:
     outputs = session.run(
-        ["output", "stateN"],
+        _OUTPUT_NAMES,
         {"input": model_input, "state": state_input, "sr": _SAMPLE_RATE_TENSOR},
     )
     if len(outputs) != 2:
@@ -442,9 +443,7 @@ def _run_inference(
     next_state_raw = np.asarray(outputs[1])
     if probability.shape != (1, 1) or next_state_raw.shape != _STATE_SHAPE:
         raise ValueError("Silero VAD inference returned malformed output shapes")
-    if not np.issubdtype(probability.dtype, np.floating) or not np.issubdtype(
-        next_state_raw.dtype, np.floating
-    ):
+    if probability.dtype.kind != "f" or next_state_raw.dtype.kind != "f":
         raise ValueError("Silero VAD inference returned non-floating tensors")
 
     score = float(probability[0, 0])
