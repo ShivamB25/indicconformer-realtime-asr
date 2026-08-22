@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from threading import Lock
 from time import perf_counter
 from typing import Any, Protocol, TypeVar
 
 from app.vad.base import VADCapacityError, VADClosedError, VADInferenceError
 
 _Result = TypeVar("_Result")
+_SKIPPED = object()
 
 
 class VADRuntimeMetrics(Protocol):
@@ -32,6 +34,19 @@ class _Job:
     function: Callable[[], Any]
     future: asyncio.Future[Any]
     enqueued_at: float
+    _cancelled: bool = field(default=False, repr=False)
+    _gate: Lock = field(default_factory=Lock, repr=False)
+
+    def cancel(self) -> None:
+        with self._gate:
+            self._cancelled = True
+
+    def run(self) -> Any:
+        # Async cancellation cannot revoke executor work; suppress only jobs not yet started.
+        with self._gate:
+            if self._cancelled:
+                return _SKIPPED
+        return self.function()
 
 
 class BoundedVADRuntime:
@@ -102,10 +117,12 @@ class BoundedVADRuntime:
         try:
             return await asyncio.wait_for(asyncio.shield(future), timeout=self._deadline_seconds)
         except TimeoutError as exc:
+            job.cancel()
             future.cancel()
             self._record_error("deadline")
             raise VADCapacityError("VAD classification deadline exceeded") from exc
         except asyncio.CancelledError:
+            job.cancel()
             future.cancel()
             raise
         except VADInferenceError:
@@ -136,7 +153,9 @@ class BoundedVADRuntime:
                 started_at = perf_counter()
                 self._record_queue_wait(started_at - job.enqueued_at)
                 try:
-                    result = await asyncio.to_thread(job.function)
+                    result = await asyncio.to_thread(job.run)
+                    if result is _SKIPPED:
+                        continue
                 except Exception as exc:
                     self._record_error("inference")
                     if not job.future.done():

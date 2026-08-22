@@ -12,7 +12,7 @@ from collections import deque
 from collections.abc import Callable, Sequence
 from functools import partial
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, Final, Protocol, cast
 
 import numpy as np
 import numpy.typing as npt
@@ -35,7 +35,7 @@ _CONTEXT_SAMPLES = 64
 _STATE_SHAPE = (2, 1, 128)
 _INITIAL_SCORE = 0.0
 _PCM16_SCALE = np.float32(1.0 / 32_768.0)
-_OUTPUT_NAMES = ("output", "stateN")
+_OUTPUT_NAMES: Final = ["output", "stateN"]
 _SAMPLE_RATE_TENSOR = np.asarray(_MODEL_SAMPLE_RATE, dtype=np.int64)
 _SAMPLE_RATE_TENSOR.flags.writeable = False
 
@@ -389,7 +389,7 @@ class SileroVADStream:
                 f"Silero VAD requires exactly {self._expected_frame_bytes} PCM16LE bytes"
             )
         integers = np.frombuffer(pcm16_20ms, dtype="<i2")
-        return np.multiply(integers, _PCM16_SCALE, dtype=np.float32)
+        return cast(_FloatArray, np.multiply(integers, _PCM16_SCALE, dtype=np.float32))
 
     def _resample(self, samples: _FloatArray) -> _FloatArray:
         if self._input_sample_rate == _MODEL_SAMPLE_RATE:
