@@ -12,7 +12,7 @@ from collections import deque
 from collections.abc import Callable, Sequence
 from functools import partial
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, Final, Protocol, cast
 
 import numpy as np
 import numpy.typing as npt
@@ -34,6 +34,8 @@ _WINDOW_SAMPLES = 512
 _CONTEXT_SAMPLES = 64
 _STATE_SHAPE = (2, 1, 128)
 _INITIAL_SCORE = 0.0
+_PCM16_SCALE = np.float32(1.0 / 32_768.0)
+_OUTPUT_NAMES: Final = ["output", "stateN"]
 _SAMPLE_RATE_TENSOR = np.asarray(_MODEL_SAMPLE_RATE, dtype=np.int64)
 _SAMPLE_RATE_TENSOR.flags.writeable = False
 
@@ -275,6 +277,7 @@ class SileroVADStream:
         "_context",
         "_epoch",
         "_failed",
+        "_expected_frame_bytes",
         "_fifo",
         "_fifo_samples",
         "_held_score",
@@ -295,6 +298,7 @@ class SileroVADStream:
         release_lease: Callable[[], None],
     ) -> None:
         self._input_sample_rate = input_sample_rate
+        self._expected_frame_bytes = expected_frame_bytes(input_sample_rate)
         self._session = session
         self._runtime = runtime
         self._release_lease = release_lease
@@ -380,11 +384,12 @@ class SileroVADStream:
     def _decode_frame(self, pcm16_20ms: bytes) -> _FloatArray:
         if not isinstance(pcm16_20ms, bytes):
             raise ValueError("Silero VAD frame must be immutable bytes")
-        required = expected_frame_bytes(self._input_sample_rate)
-        if len(pcm16_20ms) != required:
-            raise ValueError(f"Silero VAD requires exactly {required} PCM16LE bytes")
+        if len(pcm16_20ms) != self._expected_frame_bytes:
+            raise ValueError(
+                f"Silero VAD requires exactly {self._expected_frame_bytes} PCM16LE bytes"
+            )
         integers = np.frombuffer(pcm16_20ms, dtype="<i2")
-        return integers.astype(np.float32) * np.float32(1.0 / 32768.0)
+        return cast(_FloatArray, np.multiply(integers, _PCM16_SCALE, dtype=np.float32))
 
     def _resample(self, samples: _FloatArray) -> _FloatArray:
         if self._input_sample_rate == _MODEL_SAMPLE_RATE:
@@ -428,7 +433,7 @@ def _run_inference(
     session: _InferenceSession, model_input: _FloatArray, state_input: _FloatArray
 ) -> tuple[float, _FloatArray, _FloatArray]:
     outputs = session.run(
-        ["output", "stateN"],
+        _OUTPUT_NAMES,
         {"input": model_input, "state": state_input, "sr": _SAMPLE_RATE_TENSOR},
     )
     if len(outputs) != 2:
@@ -438,9 +443,7 @@ def _run_inference(
     next_state_raw = np.asarray(outputs[1])
     if probability.shape != (1, 1) or next_state_raw.shape != _STATE_SHAPE:
         raise ValueError("Silero VAD inference returned malformed output shapes")
-    if not np.issubdtype(probability.dtype, np.floating) or not np.issubdtype(
-        next_state_raw.dtype, np.floating
-    ):
+    if probability.dtype.kind != "f" or next_state_raw.dtype.kind != "f":
         raise ValueError("Silero VAD inference returned non-floating tensors")
 
     score = float(probability[0, 0])
