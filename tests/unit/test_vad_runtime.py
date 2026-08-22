@@ -133,18 +133,19 @@ async def test_runtime_deadline_is_capacity_failure_and_late_result_is_ignored()
     await dispatcher.close()
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("cancel_caller", [False, True])
-async def test_runtime_skips_executor_queued_work_after_abandonment(
+def test_runtime_skips_executor_queued_work_after_abandonment(
     cancel_caller: bool,
 ) -> None:
+    asyncio.run(_assert_executor_queued_work_is_skipped(cancel_caller))
+
+
+async def _assert_executor_queued_work_is_skipped(cancel_caller: bool) -> None:
     loop = asyncio.get_running_loop()
     occupied = asyncio.Event()
     release = threading.Event()
     late_started = threading.Event()
-    executor = ThreadPoolExecutor(max_workers=1)
-    replacement = ThreadPoolExecutor(max_workers=1)
-    loop.set_default_executor(executor)
+    loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
 
     def occupy_executor() -> None:
         loop.call_soon_threadsafe(occupied.set)
@@ -181,8 +182,6 @@ async def test_runtime_skips_executor_queued_work_after_abandonment(
         release.set()
         await asyncio.gather(blocker, return_exceptions=True)
         await dispatcher.close()
-        loop.set_default_executor(replacement)
-        executor.shutdown(wait=True)
 
 
 @pytest.mark.asyncio
