@@ -1,0 +1,16 @@
+# Deny by default: production builds receive only the files copied by deploy/Dockerfile.
+**
+
+!pyproject.toml
+!uv.lock
+!.python-version
+!app/
+!app/**
+!scripts/
+!scripts/**
+
+# Never allow a locally downloaded model to re-enter the context through an
+# otherwise allow-listed application or script directory.
+**/*.onnx
+**/*.onnx.data
+**/*.safetensors

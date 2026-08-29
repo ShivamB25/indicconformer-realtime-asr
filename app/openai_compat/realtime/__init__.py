@@ -1,0 +1,51 @@
+"""Stable public surface for OpenAI realtime schemas and session state."""
+
+from app.openai_compat.realtime.schemas import (
+    CLIENT_EVENT_ADAPTER,
+    AudioAppendEvent,
+    AudioClearedEvent,
+    AudioClearEvent,
+    AudioCommitEvent,
+    AudioCommittedEvent,
+    ClientEvent,
+    DurationUsage,
+    ErrorDetail,
+    ErrorEvent,
+    ServerVAD,
+    SessionCreatedEvent,
+    SessionUpdatedEvent,
+    SessionUpdateEvent,
+    SpeechStartedEvent,
+    SpeechStoppedEvent,
+    TranscriptionCompletedEvent,
+    TranscriptionDeltaEvent,
+    TranscriptionFailedEvent,
+)
+from app.openai_compat.realtime.state import (
+    RealtimeSessionState,
+    TurnSnapshot,
+)
+
+__all__ = [
+    "AudioAppendEvent",
+    "AudioClearEvent",
+    "AudioClearedEvent",
+    "AudioCommitEvent",
+    "AudioCommittedEvent",
+    "CLIENT_EVENT_ADAPTER",
+    "ClientEvent",
+    "DurationUsage",
+    "ErrorDetail",
+    "ErrorEvent",
+    "RealtimeSessionState",
+    "ServerVAD",
+    "SessionCreatedEvent",
+    "SessionUpdateEvent",
+    "SessionUpdatedEvent",
+    "SpeechStartedEvent",
+    "SpeechStoppedEvent",
+    "TranscriptionCompletedEvent",
+    "TranscriptionDeltaEvent",
+    "TranscriptionFailedEvent",
+    "TurnSnapshot",
+]

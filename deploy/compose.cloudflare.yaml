@@ -1,0 +1,80 @@
+services:
+  asr-cpu:
+    container_name: indic-asr-cpu-vad
+    depends_on: !override
+      secret-init:
+        condition: service_completed_successfully
+        restart: true
+    volumes: !override
+      - type: bind
+        source: ${ASR_LOCAL_MODEL_DIR:?ASR_LOCAL_MODEL_DIR must point to the local model directory}
+        target: /models
+        read_only: true
+      - api-key-data:/run/secrets/api:ro
+    ports: !reset []
+    healthcheck:
+      disable: true
+
+  asr-cpu-no-vad:
+    extends:
+      file: compose.yaml
+      service: asr-cpu
+    container_name: indic-asr-cpu-no-vad
+    depends_on: !override
+      secret-init:
+        condition: service_completed_successfully
+        restart: true
+    volumes: !override
+      - type: bind
+        source: ${ASR_LOCAL_MODEL_DIR:?ASR_LOCAL_MODEL_DIR must point to the local model directory}
+        target: /models
+        read_only: true
+      - api-key-data:/run/secrets/api:ro
+    healthcheck:
+      disable: true
+    environment:
+      ASR_VAD_PROVIDER: disabled
+    ports: !reset []
+
+  ingress:
+    image: ${ASR_IMAGE:-indic-asr-local:cpu-official}
+    container_name: indic-asr-ingress
+    profiles:
+      - cpu
+    depends_on:
+      asr-cpu:
+        condition: service_started
+      asr-cpu-no-vad:
+        condition: service_started
+    entrypoint:
+      - /usr/bin/tini
+      - --
+      - /app/.venv/bin/python
+      - /app/scripts/tcp_ingress.py
+    command:
+      - --route
+      - 18011:asr-cpu:8000
+      - --route
+      - 18010:asr-cpu-no-vad:8000
+    ports:
+      - 127.0.0.1:18011:18011
+      - 127.0.0.1:18010:18010
+    networks:
+      - serving
+      - ingress
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=32m,uid=10001,gid=10001
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 32
+    mem_limit: 128m
+    cpus: 0.25
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+
+networks:
+  ingress:

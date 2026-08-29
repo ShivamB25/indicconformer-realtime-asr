@@ -1,0 +1,479 @@
+name: image
+
+# Builds and publishes the linux/amd64 serving image to GHCR.
+#
+# Invariants enforced by this workflow:
+#   * No Hugging Face token is available or needed. Weights are NEVER baked into
+#     the image; they are mounted read-only at /models/indicconformer at runtime.
+#   * Pull requests build and audit only. Login/push/attestation steps are
+#     skipped, so a fork PR cannot obtain registry write access.
+#   * Builds publish only an immutable sha-<commit> staging tag. Semantic release
+#     tags are promoted from that exact digest only after the protected GPU gate.
+#   * Published digests carry an SBOM, SLSA provenance, and GitHub attestation.
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*.*.*"]
+  pull_request:
+    paths:
+      - deploy/**
+      - app/**
+      - scripts/**
+      - pyproject.toml
+      - uv.lock
+      - .python-version
+      - .dockerignore
+      - .github/workflows/image.yml
+      - .github/workflows/gpu-smoke.yml
+  workflow_dispatch:
+  workflow_call:
+    outputs:
+      image:
+        description: Fully qualified image name that was published.
+        value: ${{ jobs.build.outputs.image }}
+      digest:
+        description: Immutable image digest (sha256:...) to feed into gpu-smoke.
+        value: ${{ jobs.build.outputs.digest }}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: image-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  REGISTRY: ghcr.io
+  DOCKERFILE: deploy/Dockerfile
+  PLATFORM: linux/amd64
+  AUDIT_TAG: indicconformer-realtime-asr:audit
+  # Runtime mount point for weights; must ship empty inside the image.
+  MODEL_MOUNT: models/indicconformer
+  # Any weight-shaped file larger than this fails the audit (16 MiB).
+  WEIGHT_SIZE_LIMIT_BYTES: "16777216"
+
+jobs:
+  audit-dockerfile:
+    name: Audit Dockerfile (no weights, no HF secret)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Dockerfile is present
+        run: test -f "${DOCKERFILE}" || { echo "::error::${DOCKERFILE} not found"; exit 1; }
+
+      - name: Reject weight downloads at build time
+        run: |
+          set -uo pipefail
+          rc=0
+          # Model acquisition must happen outside the image build. These patterns
+          # would pull weights (and usually need a token) during `docker build`.
+          if grep -nEi 'huggingface-cli[[:space:]]+download|hf[[:space:]]+download|snapshot_download|hf_hub_download|from_pretrained|git[[:space:]]+lfs[[:space:]]+pull|clone[[:space:]]+.*huggingface\.co' "${DOCKERFILE}"; then
+            echo "::error title=Weight download in image build::${DOCKERFILE} downloads model weights; weights must be mounted at runtime"
+            rc=1
+          fi
+          if grep -nEi '(curl|wget)[^|]*\.(onnx|nemo|safetensors|ckpt|pt|pth)([^a-z]|$)' "${DOCKERFILE}"; then
+            echo "::error title=Weight download in image build::${DOCKERFILE} fetches model artefacts"
+            rc=1
+          fi
+          exit "$rc"
+
+      - name: Reject Hugging Face credentials in the build
+        run: |
+          set -uo pipefail
+          rc=0
+          if grep -nEi 'HF_TOKEN|HUGGING_?FACE_HUB_TOKEN|HUGGINGFACE_TOKEN' "${DOCKERFILE}"; then
+            echo "::error title=HF credential in image build::${DOCKERFILE} references a Hugging Face token; this workflow provides none"
+            rc=1
+          fi
+          if grep -nE '\-\-mount=type=secret' "${DOCKERFILE}"; then
+            echo "::error title=Secret mount in image build::${DOCKERFILE} mounts a build secret; this workflow passes none"
+            rc=1
+          fi
+          exit "$rc"
+
+      - name: Every external image source must be digest-pinned
+        run: |
+          set -uo pipefail
+          rc=0
+          # Both supported official runtime bases are immutable. RUNTIME_IMAGE
+          # selects one default (or another explicitly digest-pinned base).
+          for argument in CUDA_IMAGE CPU_IMAGE; do
+            if grep -qE "^[[:space:]]*ARG[[:space:]]+${argument}=" "${DOCKERFILE}"; then
+              default="$(grep -E "^[[:space:]]*ARG[[:space:]]+${argument}=" "${DOCKERFILE}" | head -1 | cut -d= -f2- | tr -d "\"' ")"
+              if [ -n "${default}" ] && ! printf '%s' "${default}" | grep -q '@sha256:[0-9a-f]\{64\}'; then
+                echo "::error title=Unpinned runtime base::ARG ${argument} default '${default}' is not digest-pinned"
+                rc=1
+              fi
+            fi
+          done
+          if grep -E 'COPY[[:space:]]+--from=[^[:space:]]+/' "${DOCKERFILE}" \
+            | grep -vE -- '--from=[^[:space:]]+@sha256:[0-9a-f]{64}([[:space:]]|$)'; then
+            echo "::error title=Unpinned COPY source::Every external COPY --from image must be digest-pinned"
+            rc=1
+          fi
+          # Literal FROM sources must also be immutable.
+          while read -r ref; do
+            case "${ref}" in
+              *'$'* | '') continue ;;
+            esac
+            if ! printf '%s' "${ref}" | grep -q '@sha256:[0-9a-f]\{64\}'; then
+              echo "::error title=Unpinned base image::FROM '${ref}' is not digest-pinned"
+              rc=1
+            fi
+          done < <(grep -iE '^[[:space:]]*FROM[[:space:]]' "${DOCKERFILE}" | awk '{print $2}')
+          exit "$rc"
+
+  build:
+    name: Build & publish (linux/amd64)
+    needs: [audit-dockerfile]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write # GHCR push; automatically read-only for fork PRs
+      id-token: write # keyless signing for build provenance
+      attestations: write # record the attestation for this repository
+    outputs:
+      image: ${{ steps.name.outputs.image }}
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The pinned CUDA/cuDNN base plus GPU Torch wheels can exceed the free
+      # space left by GitHub's preinstalled SDKs. Remove the complete hosted
+      # tool cache and unrelated toolchains before BuildKit creates its own
+      # layer store and the separate Docker image used by the filesystem audit.
+      - name: Reclaim runner disk for CUDA image
+        run: |
+          set -euo pipefail
+          df -h /
+          sudo rm -rf \
+            /opt/az \
+            /opt/ghc \
+            /opt/google \
+            /opt/hostedtoolcache \
+            /opt/microsoft \
+            /usr/local/.ghcup \
+            /usr/local/julia* \
+            /usr/local/lib/android \
+            /usr/local/share/boost \
+            /usr/share/dotnet \
+            /usr/share/swift
+          docker system prune --all --force --volumes
+          df -h /
+
+      - name: Resolve image name
+        id: name
+        run: |
+          set -euo pipefail
+          # GHCR requires a lowercase repository path.
+          image="${REGISTRY}/$(printf '%s' "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          echo "image=${image}" >> "$GITHUB_OUTPUT"
+          echo "Image: ${image}"
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Log in to GHCR
+        # Skipped for pull requests so a fork PR never holds registry write access.
+        if: ${{ github.event_name != 'pull_request' }}
+        uses: docker/login-action@371161bbe7024a29a25c5e19bfcbc0804fe9ad2c # v4.5.2
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive immutable staging tag and labels
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ steps.name.outputs.image }}
+          tags: |
+            type=sha,format=long,prefix=sha-
+          labels: |
+            org.opencontainers.image.title=indicconformer-realtime-asr
+            org.opencontainers.image.description=IndicConformer ASR serving image (weights mounted at runtime)
+
+      # Build once locally so the artefact is audited before anything is
+      # published. The publish step below reuses this build's layer cache.
+      - name: Build for audit
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: ${{ env.DOCKERFILE }}
+          platforms: ${{ env.PLATFORM }}
+          load: true
+          push: false
+          tags: ${{ env.AUDIT_TAG }}
+          cache-from: type=gha,scope=image-amd64
+          cache-to: type=gha,scope=image-amd64,mode=max
+          provenance: false
+          build-args: |
+            UV_EXTRA=official-gpu
+            ASR_ENGINE=official
+            ASR_REQUIRE_CUDA=true
+            APT_SNAPSHOT_URL=${{ vars.APT_SNAPSHOT_URL }}
+            APT_CA_CERTIFICATES_VERSION=${{ vars.APT_CA_CERTIFICATES_VERSION }}
+            APT_LIBGOMP1_VERSION=${{ vars.APT_LIBGOMP1_VERSION }}
+            APT_LIBSNDFILE1_VERSION=${{ vars.APT_LIBSNDFILE1_VERSION }}
+            APT_TINI_VERSION=${{ vars.APT_TINI_VERSION }}
+          # No `secrets:` and no Hugging Face build args, by design.
+
+      - name: Audit image for baked-in weights and credentials
+        run: |
+          set -euo pipefail
+          docker image inspect "${AUDIT_TAG}" --format '{{json .Config}}' > /tmp/image-config.json
+          docker image inspect "${AUDIT_TAG}" --format '{{.Architecture}}/{{.Os}}' > /tmp/image-platform.txt
+          docker image inspect "${AUDIT_TAG}" --format '{{.Size}}' > /tmp/image-size.txt
+          cid="$(docker create "${AUDIT_TAG}")"
+          trap 'docker rm -f "${cid}" > /dev/null 2>&1 || true' EXIT
+          # Stream the flattened filesystem: works even if the image has no shell,
+          # and never materialises a multi-gigabyte tarball on the runner.
+          cat > /tmp/audit_image.py <<'PY'
+          import json
+          import os
+          import sys
+          import tarfile
+
+          limit = int(os.environ["WEIGHT_SIZE_LIMIT_BYTES"])
+          mount = os.environ["MODEL_MOUNT"].strip("/")
+
+          # Formats that only ever hold model weights.
+          weight_ext = (".onnx", ".nemo", ".safetensors", ".ckpt", ".pth", ".tflite", ".plan", ".engine")
+          # Generic extensions that also appear in system packages, so they are
+          # only suspicious outside the OS/library trees.
+          ambiguous_ext = (".bin", ".pt")
+
+          offenders, mount_files, cache_files, biggest = [], [], [], []
+
+          with tarfile.open(fileobj=sys.stdin.buffer, mode="r|*") as tar:
+              for member in tar:
+                  if not member.isfile():
+                      continue
+                  name = member.name.lstrip("./")
+                  lower = name.lower()
+                  if name == mount or name.startswith(mount + "/"):
+                      mount_files.append(name)
+                  parts = tuple(part for part in lower.split("/") if part)
+                  # Catch default and relocated HF_HOME caches and credential
+                  # files. Installed packages use `huggingface_hub` (underscore),
+                  # not an exact `huggingface` path component.
+                  hf_cache = "huggingface" in parts
+                  model_cache = any(part.startswith("models--") for part in parts) and any(
+                      part in {"blobs", "refs", "snapshots"} for part in parts
+                  )
+                  if hf_cache or model_cache:
+                      cache_files.append(name)
+                  if member.size > limit:
+                      biggest.append((member.size, name))
+                      # Generic .bin/.pt files are never exempt by location: an
+                      # application can hide weights under /usr or /var too.
+                      if lower.endswith(weight_ext + ambiguous_ext):
+                          offenders.append((name, member.size))
+
+          failed = False
+          if offenders:
+              failed = True
+              print("::error title=Weights baked into image::model artefacts found in the image:")
+              for name, size in sorted(offenders, key=lambda item: -item[1])[:25]:
+                  print(f"  {name} ({size / 1048576:.1f} MiB)")
+          if mount_files:
+              failed = True
+              print(f"::error title=Weights baked into image::{mount} must ship empty but contains "
+                    f"{len(mount_files)} file(s), e.g. {mount_files[:5]}")
+          if cache_files:
+              failed = True
+              print("::error title=Weights baked into image::a populated Hugging Face cache is present, "
+                    f"e.g. {cache_files[:5]}")
+
+          config = json.load(open("/tmp/image-config.json"))
+          env_pairs = config.get("Env") or []
+          leaked = [e.split("=", 1)[0] for e in env_pairs
+                    if e.split("=", 1)[0].upper() in {"HF_TOKEN", "HUGGINGFACE_HUB_TOKEN",
+                                                     "HUGGING_FACE_HUB_TOKEN", "HUGGINGFACE_TOKEN"}]
+          if leaked:
+              failed = True
+              print(f"::error title=Credential baked into image::image config sets {leaked}")
+
+          platform = open("/tmp/image-platform.txt").read().strip()
+          if platform != "amd64/linux":
+              failed = True
+              print(f"::error title=Unexpected platform::built image is '{platform}', expected 'amd64/linux'")
+
+          size_mib = int(open("/tmp/image-size.txt").read().strip()) / 1048576
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary:
+              with open(summary, "a") as fh:
+                  fh.write("### Image audit\n\n")
+                  fh.write(f"- Platform: `{platform}`\n")
+                  fh.write(f"- Size: {size_mib:.0f} MiB\n")
+                  fh.write(f"- Baked weights: {'FOUND' if offenders or mount_files else 'none'}\n")
+                  fh.write(f"- Hugging Face credentials in config: {'FOUND' if leaked else 'none'}\n")
+                  fh.write(f"- `{mount}` mount point: {'populated' if mount_files else 'empty'}\n\n")
+                  if biggest:
+                      fh.write("Largest files over the audit threshold:\n\n")
+                      for size, name in sorted(biggest, reverse=True)[:10]:
+                          fh.write(f"- `{name}` — {size / 1048576:.0f} MiB\n")
+
+          if failed:
+              sys.exit(1)
+          print(f"Audit passed: no weights, no credentials, platform {platform}, {size_mib:.0f} MiB.")
+          PY
+          docker export "${cid}" | python3 /tmp/audit_image.py
+          rm -f /tmp/audit_image.py
+
+      - name: Publish immutable SHA staging image with SBOM and provenance
+        id: push
+        if: ${{ github.event_name != 'pull_request' }}
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: ${{ env.DOCKERFILE }}
+          platforms: ${{ env.PLATFORM }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          cache-from: type=gha,scope=image-amd64
+          cache-to: type=gha,scope=image-amd64,mode=max
+          sbom: true
+          provenance: mode=max
+          build-args: |
+            UV_EXTRA=official-gpu
+            ASR_ENGINE=official
+            ASR_REQUIRE_CUDA=true
+            APT_SNAPSHOT_URL=${{ vars.APT_SNAPSHOT_URL }}
+            APT_CA_CERTIFICATES_VERSION=${{ vars.APT_CA_CERTIFICATES_VERSION }}
+            APT_LIBGOMP1_VERSION=${{ vars.APT_LIBGOMP1_VERSION }}
+            APT_LIBSNDFILE1_VERSION=${{ vars.APT_LIBSNDFILE1_VERSION }}
+            APT_TINI_VERSION=${{ vars.APT_TINI_VERSION }}
+
+      # GitHub's attestation API rejects user-owned private repositories. Buildx
+      # still publishes the OCI SBOM and provenance attestations above; persist
+      # a GitHub attestation only where the API supports it.
+      - name: Attest build provenance in the registry
+        if: ${{ github.event_name != 'pull_request' && !github.event.repository.private }}
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-name: ${{ steps.name.outputs.image }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+      - name: Export SBOM and provenance artifacts
+        if: ${{ github.event_name != 'pull_request' }}
+        run: |
+          set -euo pipefail
+          mkdir -p sbom
+          ref="${{ steps.name.outputs.image }}@${{ steps.push.outputs.digest }}"
+          docker buildx imagetools inspect "${ref}" --format '{{ json .SBOM }}' > sbom/sbom.json
+          docker buildx imagetools inspect "${ref}" --format '{{ json .Provenance }}' > sbom/provenance.json
+          echo "sbom.json: $(wc -c < sbom/sbom.json) bytes"
+          echo "provenance.json: $(wc -c < sbom/provenance.json) bytes"
+
+      - name: Upload SBOM and provenance
+        if: ${{ github.event_name != 'pull_request' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sbom-amd64
+          path: sbom/
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Summarise published image
+        if: ${{ github.event_name != 'pull_request' }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### Published image"
+            echo ""
+            echo "Immutable reference (pass this to gpu-smoke):"
+            echo ""
+            echo '```'
+            echo "${{ steps.name.outputs.image }}@${{ steps.push.outputs.digest }}"
+            echo '```'
+            echo ""
+            echo "Staging tag (release tags are absent until the GPU gate succeeds):"
+            echo ""
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Note for pull requests
+        if: ${{ github.event_name == 'pull_request' }}
+        run: |
+          {
+            echo "### Pull request build"
+            echo ""
+            echo "Image built and audited for \`${PLATFORM}\`. Registry login, publish and"
+            echo "attestation were skipped because pull requests hold no credentials."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  gpu-release-gate:
+    name: GPU release gate
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    needs: [build]
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/gpu-smoke.yml
+    with:
+      image_digest: ${{ needs.build.outputs.digest }}
+      model_revision: ${{ vars.GPU_SMOKE_MODEL_REVISION }}
+      run_benchmark: true
+    secrets: inherit
+
+  promote-release-tags:
+    name: Promote semantic release tags
+    if: ${{ startsWith(github.ref, 'refs/tags/v') && needs.gpu-release-gate.result == 'success' }}
+    needs: [build, gpu-release-gate]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@371161bbe7024a29a25c5e19bfcbc0804fe9ad2c # v4.5.2
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive gated semantic tags
+        id: release-meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ needs.build.outputs.image }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+
+      - name: Promote the tested digest without rebuilding
+        env:
+          IMAGE: ${{ needs.build.outputs.image }}
+          DIGEST: ${{ needs.build.outputs.digest }}
+          RELEASE_TAGS: ${{ steps.release-meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          test -n "${DIGEST}" || { echo "::error::staging digest is empty"; exit 1; }
+          tags=()
+          while IFS= read -r tag; do
+            test -n "${tag}" && tags+=(--tag "${tag}")
+          done <<< "${RELEASE_TAGS}"
+          test "${#tags[@]}" -gt 0 || { echo "::error::no semantic release tags were derived"; exit 1; }
+          docker buildx imagetools create "${tags[@]}" "${IMAGE}@${DIGEST}"
+          echo "Promoted ${IMAGE}@${DIGEST} only after the GPU release gate succeeded."

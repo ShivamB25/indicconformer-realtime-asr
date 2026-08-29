@@ -1,0 +1,40 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Local indexing and runtime state
+.codegraph/
+*.log
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+secrets/
+.secrets/
+*.token
+.hf_token
+huggingface_token
+
+# Downloaded model weights and caches
+models/
+.models/
+model-cache/
+.cache/huggingface/
+.huggingface/
+*.onnx
+*.onnx.data
+*.safetensors

@@ -1,0 +1,551 @@
+name: GPU smoke
+
+# GPU jobs are deliberately absent from pull_request and pull_request_target.
+# They run only on protected self-hosted runners in the `gpu-smoke` environment,
+# whose required reviewers and branch policy are the final trust boundary.
+#
+# Repository variables required for schedule runs:
+#   GPU_SMOKE_IMAGE              e.g. ghcr.io/owner/indicconformer-realtime-asr
+#   GPU_SMOKE_IMAGE_DIGEST       exact sha256:<64 lowercase hex> digest
+#   GPU_SMOKE_MODEL_REVISION     exact 40-hex Hugging Face commit revision
+# Protected environment variables required on the GPU runner:
+#   GPU_MODEL_DIR                absolute path to pre-provisioned ASR model files
+#   GPU_VAD_MODEL_DIR            absolute path to pre-provisioned Silero v6.2.1 files
+#   GPU_GOLDEN_MANIFEST          absolute path to the protected golden manifest
+#   GPU_GOLDEN_HOOK              absolute path to the protected executable hook
+#   GPU_BENCHMARK_MANIFEST       absolute path to the benchmark JSON manifest
+# No Hugging Face token is accepted. The runner must be provisioned offline.
+
+on:
+  workflow_call:
+    inputs:
+      image_digest:
+        description: "Digest produced by the image publishing job"
+        required: true
+        type: string
+      model_revision:
+        description: "Exact model commit revision (40 lowercase hex)"
+        required: true
+        type: string
+      run_benchmark:
+        description: "Run the concurrency/duration/mode benchmark matrix"
+        required: false
+        default: true
+        type: boolean
+  workflow_dispatch:
+    inputs:
+      image_digest:
+        description: "Exact published image digest (sha256:<64 lowercase hex>)"
+        required: true
+        type: string
+      model_revision:
+        description: "Exact model commit revision (40 lowercase hex)"
+        required: true
+        type: string
+      run_benchmark:
+        description: "Run the concurrency/duration/mode benchmark matrix"
+        required: true
+        default: true
+        type: boolean
+  schedule:
+    - cron: "17 2 * * *"
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: gpu-smoke-${{ inputs.image_digest || github.ref }}
+  cancel-in-progress: false
+
+env:
+  ALL_LANGUAGES: as,bn,brx,doi,gu,hi,kn,kok,ks,mai,ml,mni,mr,ne,or,pa,sa,sat,sd,ta,te,ur
+  ALL_DECODERS: ctc,rnnt
+  IMAGE_REPOSITORY: ${{ vars.GPU_SMOKE_IMAGE }}
+  SELECTED_IMAGE_DIGEST: ${{ inputs.image_digest || vars.GPU_SMOKE_IMAGE_DIGEST }}
+  SELECTED_MODEL_REVISION: ${{ inputs.model_revision || vars.GPU_SMOKE_MODEL_REVISION }}
+  SHOULD_BENCHMARK: ${{ github.event_name == 'schedule' || inputs.run_benchmark }}
+  SILERO_VAD_SHA256: 1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3
+
+jobs:
+  validate-inputs:
+    name: Validate immutable inputs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      image-ref: ${{ steps.validate.outputs.image-ref }}
+      model-revision: ${{ steps.validate.outputs.model-revision }}
+      benchmark: ${{ steps.validate.outputs.benchmark }}
+    steps:
+      - name: Validate exact image digest and model revision
+        id: validate
+        env:
+          EXPECTED_REPOSITORY: ghcr.io/${{ github.repository }}
+        run: |
+          set -euo pipefail
+          repository="$(printf '%s' "${IMAGE_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          expected="$(printf '%s' "${EXPECTED_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          if [ -z "${repository}" ] || [ "${repository}" != "${expected}" ]; then
+            echo "::error title=Untrusted image repository::GPU_SMOKE_IMAGE must equal '${expected}'"
+            exit 1
+          fi
+          if ! printf '%s' "${SELECTED_IMAGE_DIGEST}" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+            echo "::error title=Invalid image digest::provide an exact sha256:<64 lowercase hex> digest; tags are forbidden"
+            exit 1
+          fi
+          if ! printf '%s' "${SELECTED_MODEL_REVISION}" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error title=Invalid model revision::provide an exact 40-character lowercase commit revision; branches/tags are forbidden"
+            exit 1
+          fi
+          case "${SHOULD_BENCHMARK}" in
+            true | false) ;;
+            *) echo "::error::benchmark input must be true or false"; exit 1 ;;
+          esac
+          echo "image-ref=${repository}@${SELECTED_IMAGE_DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "model-revision=${SELECTED_MODEL_REVISION}" >> "$GITHUB_OUTPUT"
+          echo "benchmark=${SHOULD_BENCHMARK}" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Immutable GPU smoke inputs"
+            echo ""
+            echo "- Image: \`${repository}@${SELECTED_IMAGE_DIGEST}\`"
+            echo "- Model revision: \`${SELECTED_MODEL_REVISION}\`"
+            echo "- Trigger: \`${GITHUB_EVENT_NAME}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  smoke:
+    name: ${{ matrix.accelerator }} — provider, golden, benchmark
+    needs: [validate-inputs]
+    # `protected` is a required custom runner label, not a descriptive comment.
+    # Do not remove it or substitute a generic `gpu` runner.
+    runs-on:
+      - self-hosted
+      - linux
+      - x64
+      - gpu
+      - protected
+      - ${{ matrix.accelerator }}
+    environment: gpu-smoke
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - accelerator: H100
+            max_p95_latency_ms: 5000
+            max_mean_rtf: 0.75
+            min_throughput_rps: 0.50
+          - accelerator: L40S
+            max_p95_latency_ms: 7000
+            max_mean_rtf: 1.00
+            min_throughput_rps: 0.35
+    env:
+      IMAGE_REF: ${{ needs.validate-inputs.outputs.image-ref }}
+      MODEL_REVISION: ${{ needs.validate-inputs.outputs.model-revision }}
+      RUN_BENCHMARK: ${{ needs.validate-inputs.outputs.benchmark }}
+      EXPECTED_ACCELERATOR: ${{ matrix.accelerator }}
+      # These are protected environment variables, not repository defaults.
+      MODEL_DIR: ${{ vars.GPU_MODEL_DIR }}
+      VAD_MODEL_DIR: ${{ vars.GPU_VAD_MODEL_DIR }}
+      GOLDEN_MANIFEST: ${{ vars.GPU_GOLDEN_MANIFEST }}
+      GOLDEN_HOOK: ${{ vars.GPU_GOLDEN_HOOK }}
+      BENCHMARK_MANIFEST: ${{ vars.GPU_BENCHMARK_MANIFEST }}
+      ASR_MODEL_REPO_ID: ai4bharat/indic-conformer-600m-multilingual
+      MAX_GOLDEN_WER: "0.20"
+      MAX_P95_LATENCY_MS: ${{ matrix.max_p95_latency_ms }}
+      MAX_MEAN_RTF: ${{ matrix.max_mean_rtf }}
+      MIN_THROUGHPUT_RPS: ${{ matrix.min_throughput_rps }}
+    steps:
+      - name: Checkout trusted workflow revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate protected runner assets
+        run: |
+          set -euo pipefail
+          for variable in MODEL_DIR VAD_MODEL_DIR GOLDEN_MANIFEST GOLDEN_HOOK BENCHMARK_MANIFEST; do
+            value="${!variable:-}"
+            if [ -z "${value}" ] || [[ "${value}" != /* ]]; then
+              echo "::error title=Missing protected asset::${variable} must be an absolute path set in the gpu-smoke environment"
+              exit 1
+            fi
+          done
+          test -d "${MODEL_DIR}" || { echo "::error::MODEL_DIR does not exist"; exit 1; }
+          test -f "${MODEL_DIR}/model-manifest.json" || { echo "::error::model-manifest.json does not exist"; exit 1; }
+          test -d "${VAD_MODEL_DIR}" || { echo "::error::VAD_MODEL_DIR does not exist"; exit 1; }
+          test ! -L "${VAD_MODEL_DIR}" || { echo "::error::VAD_MODEL_DIR must not be a symlink"; exit 1; }
+          test -f "${VAD_MODEL_DIR}/silero_vad.onnx" || { echo "::error::silero_vad.onnx does not exist"; exit 1; }
+          test -f "${VAD_MODEL_DIR}/LICENSE" || { echo "::error::Silero LICENSE does not exist"; exit 1; }
+          test -f "${GOLDEN_MANIFEST}" || { echo "::error::GOLDEN_MANIFEST does not exist"; exit 1; }
+          test -x "${GOLDEN_HOOK}" || { echo "::error::GOLDEN_HOOK is not executable"; exit 1; }
+          test -f "${BENCHMARK_MANIFEST}" || { echo "::error::BENCHMARK_MANIFEST does not exist"; exit 1; }
+
+      - name: Verify observed GPU model
+        id: gpu
+        run: |
+          set -euo pipefail
+          nvidia-smi --query-gpu=index,name,memory.total,driver_version --format=csv,noheader
+          names="$(nvidia-smi --query-gpu=name --format=csv,noheader)"
+          if ! printf '%s\n' "${names}" | grep -Fq "${EXPECTED_ACCELERATOR}"; then
+            echo "::error title=Wrong protected runner::expected an ${EXPECTED_ACCELERATOR}; nvidia-smi reported '${names}'"
+            exit 1
+          fi
+          count="$(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)"
+          test "${count}" -ge 1 || { echo "::error::nvidia-smi reported no GPU"; exit 1; }
+          echo "gpu-count=${count}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify pre-provisioned model revision
+        run: |
+          set -euo pipefail
+          MODEL_MANIFEST="${MODEL_DIR}/model-manifest.json" python3 - <<'PY'
+          import json
+          import os
+          import pathlib
+          import sys
+
+          path = pathlib.Path(os.environ["MODEL_MANIFEST"])
+          try:
+              manifest = json.loads(path.read_text(encoding="utf-8"))
+          except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+              print(f"::error title=Invalid model manifest::{type(exc).__name__}")
+              sys.exit(1)
+          expected_revision = os.environ["MODEL_REVISION"]
+          revision = manifest.get("revision")
+          if revision != expected_revision:
+              print("::error title=Model revision mismatch::pre-provisioned model revision does not match the exact workflow input")
+              sys.exit(1)
+          print(f"Verified offline model revision {revision}")
+          PY
+
+      - name: Log in to GHCR for read-only pull
+        uses: docker/login-action@371161bbe7024a29a25c5e19bfcbc0804fe9ad2c # v4.5.2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull exact image digest
+        run: |
+          set -euo pipefail
+          docker pull "${IMAGE_REF}"
+          if ! docker image inspect "${IMAGE_REF}" \
+            --format '{{range .RepoDigests}}{{println .}}{{end}}' \
+            | grep -Fxq "${IMAGE_REF}"; then
+            echo "::error title=Digest mismatch::the pulled image does not report the exact requested repository digest"
+            exit 1
+          fi
+
+      - name: Verify pinned Silero VAD artifacts offline
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --network none \
+            --read-only \
+            --entrypoint /app/.venv/bin/python \
+            --mount "type=bind,src=${VAD_MODEL_DIR},dst=/models/vad/silero-v6.2.1,readonly" \
+            "${IMAGE_REF}" \
+            /app/scripts/download_vad_model.py \
+            --output-dir /models/vad/silero-v6.2.1 \
+            --offline
+
+      - name: Fail closed unless official CUDA inference is available
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --network none \
+            --gpus all \
+            --entrypoint /app/.venv/bin/python \
+            -e CUDA_VISIBLE_DEVICES=0 \
+            "${IMAGE_REF}" \
+            -c 'import torch; assert torch.cuda.is_available(), "CUDA is required but unavailable"'
+
+      - name: Create ephemeral service API key
+        run: |
+          set -euo pipefail
+          token_file="${RUNNER_TEMP}/asr-api-key-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${EXPECTED_ACCELERATOR,,}"
+          umask 077
+          python3 -c 'import secrets; print(secrets.token_urlsafe(48))' > "${token_file}"
+          echo "ASR_API_KEY_TOKEN_FILE=${token_file}" >> "$GITHUB_ENV"
+
+      - name: Prepare runtime-owned API key and isolated serving network
+        run: |
+          set -euo pipefail
+          suffix="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${EXPECTED_ACCELERATOR,,}"
+          key_volume="asr-gpu-key-${suffix}"
+          offline_network="asr-gpu-offline-${suffix}"
+          echo "ASR_API_KEY_VOLUME=${key_volume}" >> "$GITHUB_ENV"
+          echo "ASR_OFFLINE_NETWORK=${offline_network}" >> "$GITHUB_ENV"
+          docker volume rm "${key_volume}" > /dev/null 2>&1 || true
+          docker network rm "${offline_network}" > /dev/null 2>&1 || true
+          docker volume create "${key_volume}" > /dev/null
+          docker network create --internal "${offline_network}" > /dev/null
+          docker run --rm \
+            --user 0:0 \
+            --network none \
+            --read-only \
+            --cap-drop ALL \
+            --cap-add CHOWN \
+            --cap-add DAC_OVERRIDE \
+            --cap-add FOWNER \
+            --security-opt no-new-privileges \
+            --entrypoint /bin/sh \
+            --mount "type=bind,src=${ASR_API_KEY_TOKEN_FILE},dst=/run/source/api_key,readonly" \
+            --mount "type=volume,src=${key_volume},dst=/run/prepared" \
+            "${IMAGE_REF}" \
+            -euc 'install -d -o 10001 -g 10001 -m 0700 /run/prepared; install -o 10001 -g 10001 -m 0400 /run/source/api_key /run/prepared/api_key'
+
+      - name: Start release image with offline model mount
+        id: server
+        run: |
+          set -euo pipefail
+          container="asr-gpu-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${EXPECTED_ACCELERATOR,,}"
+          docker rm -f "${container}" > /dev/null 2>&1 || true
+          docker run -d \
+            --name "${container}" \
+            --gpus all \
+            --network "${ASR_OFFLINE_NETWORK}" \
+            --stop-timeout 180 \
+            --read-only \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --pids-limit 512 \
+            --tmpfs /tmp:rw,noexec,nosuid,size=1g \
+            -p 127.0.0.1::8000 \
+            --mount "type=bind,src=${MODEL_DIR},dst=/models/indicconformer,readonly" \
+            --mount "type=bind,src=${VAD_MODEL_DIR},dst=/models/vad/silero-v6.2.1,readonly" \
+            --mount "type=volume,src=${ASR_API_KEY_VOLUME},dst=/run/secrets,readonly" \
+            -e ASR_ENGINE=official \
+            -e ASR_ENVIRONMENT=production \
+            -e ASR_MODEL_DIR=/models/indicconformer \
+            -e ASR_MODEL_MANIFEST=/models/indicconformer/model-manifest.json \
+            -e ASR_MODEL_REPO_ID="${ASR_MODEL_REPO_ID}" \
+            -e ASR_MODEL_REVISION="${MODEL_REVISION}" \
+            -e ASR_OFFLINE=true \
+            -e ASR_REQUIRE_CUDA=true \
+            -e ASR_VAD_PROVIDER=silero \
+            -e ASR_VAD_MODEL_PATH=/models/vad/silero-v6.2.1/silero_vad.onnx \
+            -e ASR_VAD_MODEL_SHA256="${SILERO_VAD_SHA256}" \
+            -e ASR_API_KEY_FILE=/run/secrets/api_key \
+            -e HF_HUB_OFFLINE=1 \
+            -e TRANSFORMERS_OFFLINE=1 \
+            -e HF_HUB_DISABLE_TELEMETRY=1 \
+            -e ASR_HOST=0.0.0.0 \
+            -e ASR_PORT=8000 \
+            "${IMAGE_REF}"
+          port="$(docker port "${container}" 8000/tcp | sed -n 's/.*://p' | head -1)"
+          test -n "${port}" || { echo "::error::could not resolve mapped API port"; exit 1; }
+          echo "container=${container}" >> "$GITHUB_OUTPUT"
+          echo "base-url=http://127.0.0.1:${port}" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for ready engine and scheduler
+        env:
+          BASE_URL: ${{ steps.server.outputs.base-url }}
+          CONTAINER: ${{ steps.server.outputs.container }}
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 600))
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            if ! docker inspect "${CONTAINER}" --format '{{.State.Running}}' | grep -qx true; then
+              echo "::error title=ASR container exited::container stopped before readiness; logs withheld to prevent transcript/audio disclosure"
+              exit 1
+            fi
+            status="$(curl --silent --output /tmp/ready.json --write-out '%{http_code}' "${BASE_URL}/health/ready" || true)"
+            if [ "${status}" = 200 ] && python3 - <<'PY'
+          import json
+          import sys
+          payload = json.load(open('/tmp/ready.json'))
+          ok = (payload.get('status') == 'ready'
+                and payload.get('checks', {}).get('engine') == 'ready'
+                and payload.get('checks', {}).get('scheduler') == 'ready')
+          sys.exit(0 if ok else 1)
+          PY
+            then
+              echo "ASR service ready."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::ASR service did not become ready within 600 seconds"
+          exit 1
+
+      - name: Prove serving ingress works without outbound egress
+        env:
+          BASE_URL: ${{ steps.server.outputs.base-url }}
+          CONTAINER: ${{ steps.server.outputs.container }}
+        run: |
+          set -euo pipefail
+          test "$(docker network inspect "${ASR_OFFLINE_NETWORK}" --format '{{.Internal}}')" = true
+          curl --fail --silent --output /dev/null "${BASE_URL}/health/live"
+          if docker exec "${CONTAINER}" /app/.venv/bin/python -c \
+            'import socket; socket.create_connection(("1.1.1.1", 443), timeout=2)' \
+            > /dev/null 2>&1; then
+            echo "::error title=Serving egress is open::offline serving container reached an external address"
+            exit 1
+          fi
+          echo "Published ingress is healthy and the serving network rejected external egress."
+
+      - name: All-language CTC and RNNT golden hook
+        env:
+          BASE_URL: ${{ steps.server.outputs.base-url }}
+        run: |
+          set -euo pipefail
+          mkdir -p results
+          # Hook contract: output JSON {"cases":[{"language":"hi",
+          # "decoder":"ctc","wer":0.0,"passed":true}, ...]}. It must cover
+          # every language/decoder pair and must not emit transcript text.
+          # Hook stdout/stderr is not streamed because it may contain references.
+          if ! "${GOLDEN_HOOK}" \
+            --base-url "${BASE_URL}" \
+            --manifest "${GOLDEN_MANIFEST}" \
+            --languages "${ALL_LANGUAGES}" \
+            --decoders "${ALL_DECODERS}" \
+            --max-wer "${MAX_GOLDEN_WER}" \
+            --output /tmp/golden-raw.json \
+            > /tmp/golden-hook.log 2>&1; then
+            echo "::error title=Golden hook failed::protected golden test returned non-zero; output withheld to prevent transcript logging"
+            rm -f /tmp/golden-hook.log /tmp/golden-raw.json
+            exit 1
+          fi
+          rm -f /tmp/golden-hook.log
+
+      - name: Validate complete golden coverage
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import atexit
+          import json
+          import os
+          import pathlib
+          import sys
+
+          raw_path = pathlib.Path("/tmp/golden-raw.json")
+          atexit.register(raw_path.unlink, missing_ok=True)
+          languages = os.environ["ALL_LANGUAGES"].split(",")
+          decoders = os.environ["ALL_DECODERS"].split(",")
+          expected = {(language, decoder) for language in languages for decoder in decoders}
+          payload = json.loads(raw_path.read_text(encoding="utf-8"))
+          cases = payload.get("cases") if isinstance(payload, dict) else None
+          if not isinstance(cases, list):
+              print("::error::golden hook output needs a cases array")
+              sys.exit(1)
+          forbidden = {"text", "transcript", "reference", "hypothesis", "audio", "audio_bytes"}
+          def contains_raw_data(value):
+              if isinstance(value, dict):
+                  return bool(forbidden.intersection(str(key).lower() for key in value)) or any(
+                      contains_raw_data(item) for item in value.values()
+                  )
+              if isinstance(value, list):
+                  return any(contains_raw_data(item) for item in value)
+              return False
+          observed = set()
+          failed = []
+          for index, case in enumerate(cases):
+              if not isinstance(case, dict) or contains_raw_data(case):
+                  print(f"::error::golden case {index} is invalid or contains raw transcript/audio data")
+                  sys.exit(1)
+              key = (case.get("language"), case.get("decoder"))
+              if key in observed:
+                  print(f"::error::duplicate golden case {key}")
+                  sys.exit(1)
+              observed.add(key)
+              wer = case.get("wer")
+              if not isinstance(wer, (int, float)) or isinstance(wer, bool) or not 0 <= wer <= 1:
+                  print(f"::error::golden case {key} has invalid WER")
+                  sys.exit(1)
+              if case.get("passed") is not True or wer > float(os.environ["MAX_GOLDEN_WER"]):
+                  failed.append((key, wer))
+          if observed != expected:
+              missing = sorted(expected - observed)
+              extra = sorted(observed - expected)
+              print(f"::error title=Incomplete golden coverage::missing={missing}, extra={extra}")
+              sys.exit(1)
+          if failed:
+              print(f"::error title=Golden WER threshold failed::{len(failed)} case(s) exceeded WER {os.environ['MAX_GOLDEN_WER']}")
+              sys.exit(1)
+          # Persist only aggregate/case metrics. Never retain hook-provided text,
+          # references, hypotheses, audio paths or audio bytes in an artifact.
+          scrubbed = {
+              "schema_version": "1.0",
+              "thresholds": {"max_wer_per_case": float(os.environ["MAX_GOLDEN_WER"])},
+              "coverage": {"languages": len(languages), "decoders": decoders, "cases": len(expected)},
+              "cases": [
+                  {
+                      "language": case["language"],
+                      "decoder": case["decoder"],
+                      "wer": case["wer"],
+                      "passed": case["passed"],
+                  }
+                  for case in cases
+              ],
+              "passed": True,
+          }
+          pathlib.Path("results/golden.json").write_text(
+              json.dumps(scrubbed, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+          )
+          print(f"Golden coverage passed: {len(expected)} language/decoder cases; max WER {os.environ['MAX_GOLDEN_WER']}.")
+          PY
+
+      - name: Concurrency, duration and mode benchmark matrix
+        if: ${{ env.RUN_BENCHMARK == 'true' }}
+        env:
+          BASE_URL: ${{ steps.server.outputs.base-url }}
+        run: |
+          set -euo pipefail
+          # These are policy budgets, not previously observed GPU values. The
+          # benchmark writes only measurements it observes from this run.
+          trap 'rm -f /tmp/benchmark-stdout.json' EXIT
+          python3 scripts/benchmark.py \
+            --base-url "${BASE_URL}" \
+            --manifest "${BENCHMARK_MANIFEST}" \
+            --api-key-file "${ASR_API_KEY_TOKEN_FILE}" \
+            --concurrency 1,4,8 \
+            --duration-seconds 30,60 \
+            --mode latency,hybrid,accuracy \
+            --decoder ctc,rnnt \
+            --warmup-requests 2 \
+            --max-p95-latency-ms "${MAX_P95_LATENCY_MS}" \
+            --max-mean-rtf "${MAX_MEAN_RTF}" \
+            --min-throughput-rps "${MIN_THROUGHPUT_RPS}" \
+            --output "results/benchmark-${EXPECTED_ACCELERATOR}.json" \
+            > /tmp/benchmark-stdout.json
+
+      - name: Write threshold summary
+        if: ${{ always() }}
+        run: |
+          {
+            echo "### ${EXPECTED_ACCELERATOR} GPU smoke"
+            echo ""
+            echo "- Exact image: \`${IMAGE_REF}\`"
+            echo "- Exact model revision: \`${MODEL_REVISION}\`"
+            echo "- Golden coverage: 22 languages × CTC/RNNT"
+            echo "- Golden WER threshold: ≤ ${MAX_GOLDEN_WER} per case"
+            if [ "${RUN_BENCHMARK}" = true ]; then
+              echo "- p95 latency threshold: ≤ ${MAX_P95_LATENCY_MS} ms per cell"
+              echo "- mean end-to-end RTF threshold: ≤ ${MAX_MEAN_RTF} per cell"
+              echo "- throughput threshold: ≥ ${MIN_THROUGHPUT_RPS} requests/s per cell"
+            else
+              echo "- Benchmark: intentionally disabled by the manual input"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload JSON results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gpu-smoke-${{ matrix.accelerator }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: results/*.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Clean up container
+        if: ${{ always() }}
+        env:
+          CONTAINER: ${{ steps.server.outputs.container }}
+        run: |
+          if [ -n "${CONTAINER}" ]; then
+            docker rm -f "${CONTAINER}" > /dev/null 2>&1 || true
+          fi
+          docker image rm "${IMAGE_REF}" > /dev/null 2>&1 || true
+          docker volume rm "${ASR_API_KEY_VOLUME}" > /dev/null 2>&1 || true
+          docker network rm "${ASR_OFFLINE_NETWORK}" > /dev/null 2>&1 || true
+          rm -f "${ASR_API_KEY_TOKEN_FILE}"

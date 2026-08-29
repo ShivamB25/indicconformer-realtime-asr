@@ -1,0 +1,195 @@
+name: CI
+
+# CPU-only "normal" CI. Runs on every push/PR, including PRs from forks.
+#
+# Fork-safety: this workflow reads no secrets and requests a read-only token.
+# Anything requiring credentials or GPU hardware lives in image.yml / gpu-smoke.yml.
+# Never convert this workflow to `pull_request_target`.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # uv is pinned so `--frozen` can never fail on lockfile-format skew.
+  UV_VERSION: "0.11.33"
+  PYTHON_VERSION: "3.11"
+
+  # uv hygiene: fail instead of silently re-resolving, and keep logs readable.
+  UV_FROZEN: "1"
+  UV_NO_PROGRESS: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+
+  # MockEngine-safe environment. CPU CI must never select a CUDA engine,
+  # never reach the Hugging Face network, and never download model weights.
+  ASR_ENGINE: mock
+  ASR_ENVIRONMENT: test
+  CUDA_VISIBLE_DEVICES: ""
+  HF_HUB_OFFLINE: "1"
+  TRANSFORMERS_OFFLINE: "1"
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  TOKENIZERS_PARALLELISM: "false"
+  OMP_NUM_THREADS: "2"
+
+jobs:
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Sync locked CPU environment
+        run: uv sync --frozen --extra official-cpu --group dev
+
+      - name: ruff check
+        run: uv run ruff check --output-format=github .
+
+      - name: ruff format --check
+        run: uv run ruff format --check .
+
+  typecheck:
+    name: Typecheck (mypy)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Sync locked CPU environment
+        run: uv sync --frozen --extra official-cpu --group dev
+
+      - name: mypy
+        run: uv run mypy app tests
+
+  test:
+    name: Tests (CPU, MockEngine)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Sync locked CPU environment
+        run: uv sync --frozen --extra official-cpu --group dev
+
+      # The `official-cpu` and `official-gpu` extras are mutually exclusive. If a
+      # GPU runtime ever resolves into the CPU job, tests would silently probe CUDA on a
+      # machine that has none, so fail loudly instead.
+      - name: Guard — no GPU runtime in the CPU environment
+        run: |
+          set -euo pipefail
+          pkgs="$(uv pip list --format=json)"
+          rc=0
+          for bad in onnxruntime-gpu tensorrt tensorrt-libs nvidia-cudnn-cu12 nvidia-cublas-cu12; do
+            if printf '%s' "$pkgs" | grep -q "\"$bad\""; then
+              echo "::error title=GPU package in CPU CI::'$bad' resolved into the CPU environment"
+              rc=1
+            fi
+          done
+          exit "$rc"
+
+      - name: Guard — MockEngine environment is active
+        run: |
+          set -euo pipefail
+          test "${ASR_ENGINE}" = "mock" || { echo "::error::ASR_ENGINE must be 'mock' in CPU CI"; exit 1; }
+          test "${HF_HUB_OFFLINE}" = "1" || { echo "::error::HF_HUB_OFFLINE must be 1 in CPU CI"; exit 1; }
+          echo "MockEngine-safe environment confirmed (offline, no CUDA devices)."
+
+      - name: pytest
+        run: uv run pytest --junitxml=reports/pytest.xml
+
+      - name: Upload test report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pytest-report
+          path: reports/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  benchmark-cli:
+    name: Benchmark CLI self-check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: false
+
+      # scripts/benchmark.py is standard-library only so it can also run inside
+      # the release image on a GPU runner. Verify that here, without a venv.
+      - name: Benchmark CLI runs on a bare interpreter
+        run: |
+          set -euo pipefail
+          python3 scripts/benchmark.py --help > /dev/null
+          python3 scripts/benchmark.py --self-check
+
+  ci-ok:
+    name: CI OK
+    if: ${{ always() }}
+    needs: [lint, typecheck, test, benchmark-cli]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Verify all required jobs succeeded
+        run: |
+          set -euo pipefail
+          results="${{ join(needs.*.result, ' ') }}"
+          echo "upstream job results: ${results}"
+          for r in ${results}; do
+            if [ "$r" != "success" ]; then
+              echo "::error title=CI failed::a required job reported '${r}'"
+              exit 1
+            fi
+          done
+          echo "All required CPU CI jobs succeeded."
